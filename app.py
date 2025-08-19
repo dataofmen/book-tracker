@@ -718,7 +718,7 @@ class BookTracker:
         return results
     
     def bulk_add_books_safe(self, book_titles):
-        """API 호출 없이 제목만으로 안전하게 대량 추가"""
+        """안전하게 대량 추가 - ISBN은 제목을 먼저 찾아서 저장"""
         results = {
             'success': [],
             'duplicates': [],
@@ -726,40 +726,57 @@ class BookTracker:
             'total': len(book_titles)
         }
         
-        for i, title in enumerate(book_titles):
-            title = title.strip()
-            if not title:
+        for i, query in enumerate(book_titles):
+            query = query.strip()
+            if not query:
                 continue
                 
             try:
-                print(f"안전 모드 처리 ({i+1}/{len(book_titles)}): {title[:50]}...")
+                print(f"안전 모드 처리 ({i+1}/{len(book_titles)}): {query[:50]}...")
                 
-                # 중복 검사
+                # ISBN인지 확인하고 실제 제목 찾기
+                if self._is_isbn(query):
+                    print(f"  ISBN 감지: {query} → 제목 검색 중...")
+                    try:
+                        books_info = self.search_by_isbn(query)
+                        if books_info:
+                            actual_title = books_info[0]['title']
+                            print(f"  실제 제목: {actual_title}")
+                        else:
+                            actual_title = f"ISBN {query}"  # 검색 실패 시 식별 가능한 형태
+                            print(f"  ISBN 검색 실패, 대체 제목 사용: {actual_title}")
+                    except Exception as isbn_error:
+                        actual_title = f"ISBN {query}"
+                        print(f"  ISBN 검색 오류: {str(isbn_error)}")
+                else:
+                    actual_title = query
+                
+                # 중복 검사 (실제 제목으로)
                 try:
-                    if self.check_duplicate(title):
+                    if self.check_duplicate(actual_title):
                         results['duplicates'].append({
-                            'title': title,
+                            'title': actual_title,
                             'reason': '이미 등록된 책입니다'
                         })
                         continue
                 except Exception as dup_error:
-                    print(f"중복 검사 실패, 계속 진행: {str(dup_error)}")
+                    print(f"  중복 검사 실패, 계속 진행: {str(dup_error)}")
                     # 중복 검사 실패해도 계속 진행
                 
-                # API 호출 없이 제목만으로 추가
-                book_id = self.add_book_simple(title)
+                # 실제 제목으로 책 추가
+                book_id = self.add_book_simple(actual_title)
                 
                 results['success'].append({
-                    'title': title,
+                    'title': actual_title,
                     'authors': 'Unknown',
                     'id': book_id
                 })
-                print(f"안전 추가 성공: {title}")
+                print(f"안전 추가 성공: {actual_title}")
                 
             except Exception as e:
-                print(f"안전 모드에서도 오류: {title} - {str(e)}")
+                print(f"안전 모드에서도 오류: {query} - {str(e)}")
                 results['errors'].append({
-                    'title': title,
+                    'title': query,
                     'reason': f'데이터베이스 오류: {str(e)}'
                 })
         
