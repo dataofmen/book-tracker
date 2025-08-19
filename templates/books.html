@@ -7,6 +7,17 @@
     <h2><i class="fas fa-list"></i> 내 책 목록</h2>
     <div class="d-flex align-items-center">
         <span class="badge bg-primary fs-6 me-3">총 {{ books|length }}권</span>
+        {% set unknown_count = 0 %}
+        {% for book in books %}
+            {% if book.authors == 'Unknown' %}
+                {% set unknown_count = unknown_count + 1 %}
+            {% endif %}
+        {% endfor %}
+        {% if unknown_count > 0 %}
+        <button class="btn btn-warning me-2" onclick="bulkUpdateDetails()">
+            <i class="fas fa-sync"></i> 상세정보 업데이트 ({{ unknown_count }}권)
+        </button>
+        {% endif %}
         <a href="{{ url_for('index') }}" class="btn btn-success">
             <i class="fas fa-plus"></i> 새 책 추가
         </a>
@@ -178,11 +189,17 @@
                 </div>
                 
                 <div class="card-footer bg-transparent">
-                    <div class="d-flex justify-content-center gap-2">
+                    <div class="d-flex justify-content-center gap-1">
                         <button class="btn btn-outline-primary btn-sm" 
                                 onclick="viewBookDetails({{ loop.index0 }})">
                             <i class="fas fa-eye"></i> 상세보기
                         </button>
+                        {% if book.authors == 'Unknown' %}
+                        <button class="btn btn-outline-warning btn-sm" 
+                                onclick="updateBookDetails({{ book.id }}, '{{ book.title|replace("'", "\\'") }}')">
+                            <i class="fas fa-sync"></i> 업데이트
+                        </button>
+                        {% endif %}
                         <button class="btn btn-outline-danger btn-sm" 
                                 onclick="confirmDeleteBook({{ book.id }}, '{{ book.title|replace("'", "\\'") }}')">
                             <i class="fas fa-trash"></i> 삭제
@@ -482,5 +499,71 @@ function executeDelete() {
 $(document).ready(function() {
     sortBooks();
 });
+
+// 개별 책 상세정보 업데이트
+function updateBookDetails(bookId, bookTitle) {
+    if (!confirm(`"${bookTitle}"의 상세정보를 업데이트하시겠습니까?`)) {
+        return;
+    }
+    
+    const button = event.target.closest('button');
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 업데이트 중...';
+    
+    $.ajax({
+        url: `/update_book_details/${bookId}`,
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                alert(response.message);
+                location.reload(); // 페이지 새로고침
+            } else {
+                alert('업데이트 실패: ' + response.error);
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON?.error || '서버 오류가 발생했습니다.';
+            alert('업데이트 실패: ' + error);
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
+    });
+}
+
+// 대량 상세정보 업데이트
+function bulkUpdateDetails() {
+    if (!confirm('Unknown 상태인 모든 책의 상세정보를 업데이트하시겠습니까?\n시간이 다소 걸릴 수 있습니다.')) {
+        return;
+    }
+    
+    const button = event.target;
+    const originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 업데이트 중...';
+    
+    $.ajax({
+        url: '/bulk_update_details',
+        method: 'POST',
+        success: function(response) {
+            if (response.success) {
+                alert(response.message);
+                location.reload(); // 페이지 새로고침
+            } else {
+                alert('대량 업데이트 실패: ' + response.error);
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON?.error || '서버 오류가 발생했습니다.';
+            alert('대량 업데이트 실패: ' + error);
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
+    });
+}
 </script>
 {% endblock %}

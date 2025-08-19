@@ -291,6 +291,33 @@ class BookTracker:
         
         return book_id
     
+    def update_book_details(self, book_id, book_info):
+        """책 상세정보 업데이트"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE books SET 
+                authors = ?, publisher = ?, published_date = ?, isbn = ?,
+                description = ?, thumbnail_url = ?, kyobo_link = ?
+            WHERE id = ?
+        ''', (
+            book_info['authors'],
+            book_info['publisher'],
+            book_info['published_date'],
+            book_info['isbn'],
+            book_info['description'],
+            book_info['thumbnail_url'],
+            book_info.get('kyobo_link', ''),
+            book_id
+        ))
+        
+        conn.commit()
+        rows_affected = cursor.rowcount
+        conn.close()
+        
+        return rows_affected > 0
+    
     def get_all_books(self):
         """모든 책 목록 조회"""
         conn = sqlite3.connect(self.db_path)
@@ -919,6 +946,127 @@ def bulk_add_text():
         return jsonify({
             'success': False,
             'error': f'텍스트 처리 중 오류가 발생했습니다: {str(e)}'
+        }), 500
+
+@app.route('/update_book_details/<int:book_id>', methods=['POST'])
+def update_book_details(book_id):
+    """개별 책 상세정보 업데이트"""
+    try:
+        # 현재 책 정보 조회
+        books = book_tracker.get_all_books()
+        current_book = None
+        for book in books:
+            if book['id'] == book_id:
+                current_book = book
+                break
+        
+        if not current_book:
+            return jsonify({'success': False, 'error': '책을 찾을 수 없습니다'}), 404
+        
+        # 책 제목으로 API 검색
+        books_info = book_tracker.search_book_info(current_book['title'])
+        
+        if not books_info:
+            return jsonify({
+                'success': False, 
+                'error': '해당 책의 상세정보를 찾을 수 없습니다'
+            }), 404
+        
+        # 첫 번째 검색 결과로 업데이트
+        book_info = books_info[0]
+        success = book_tracker.update_book_details(book_id, book_info)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'{book_info["title"]} 상세정보가 업데이트되었습니다',
+                'book_info': book_info
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '상세정보 업데이트에 실패했습니다'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'상세정보 업데이트 중 오류: {str(e)}'
+        }), 500
+
+@app.route('/bulk_update_details', methods=['POST'])
+def bulk_update_details():
+    """Unknown 상태인 책들의 상세정보 대량 업데이트"""
+    try:
+        # Unknown 상태인 책들만 필터링
+        all_books = book_tracker.get_all_books()
+        unknown_books = [book for book in all_books if book['authors'] == 'Unknown']
+        
+        if not unknown_books:
+            return jsonify({
+                'success': True,
+                'message': '업데이트할 책이 없습니다 (모든 책의 상세정보가 이미 있음)',
+                'results': {'success': 0, 'errors': 0, 'total': 0}
+            })
+        
+        results = {
+            'success': [],
+            'errors': [],
+            'total': len(unknown_books)
+        }
+        
+        for i, book in enumerate(unknown_books):
+            try:
+                print(f"상세정보 업데이트 중 ({i+1}/{len(unknown_books)}): {book['title']}")
+                
+                # API 검색
+                books_info = book_tracker.search_book_info(book['title'])
+                
+                if books_info:
+                    book_info = books_info[0]
+                    success = book_tracker.update_book_details(book['id'], book_info)
+                    
+                    if success:
+                        results['success'].append({
+                            'id': book['id'],
+                            'title': book_info['title'],
+                            'authors': book_info['authors']
+                        })
+                    else:
+                        results['errors'].append({
+                            'id': book['id'],
+                            'title': book['title'],
+                            'reason': '데이터베이스 업데이트 실패'
+                        })
+                else:
+                    results['errors'].append({
+                        'id': book['id'],
+                        'title': book['title'],
+                        'reason': '검색 결과 없음'
+                    })
+                    
+            except Exception as e:
+                results['errors'].append({
+                    'id': book['id'],
+                    'title': book['title'],
+                    'reason': f'오류: {str(e)}'
+                })
+            
+            # 서버 부하 방지
+            if i > 0 and i % 5 == 0:
+                import time
+                time.sleep(0.5)
+        
+        return jsonify({
+            'success': True,
+            'message': f'상세정보 업데이트 완료: 성공 {len(results["success"])}권, 실패 {len(results["errors"])}권',
+            'results': results
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'대량 업데이트 중 오류: {str(e)}'
         }), 500
 
 if __name__ == '__main__':
