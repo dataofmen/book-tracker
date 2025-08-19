@@ -128,106 +128,188 @@ class BookTracker:
         return False
     
     def search_by_isbn(self, isbn):
-        """ISBN으로 책 검색"""
+        """ISBN으로 책 검색 - 한국 도서 특화"""
         isbn = re.sub(r'[\s-]', '', isbn.strip())  # 공백, 하이픈 제거
+        print(f"  정규화된 ISBN: {isbn}")
         
-        # Google Books API로 ISBN 검색 (더 정확함)
-        books = self._search_google_books_by_isbn(isbn)
-        if books:
-            print(f"  Google Books ISBN 검색 성공: {len(books)}권")
-            return books
+        # 한국 도서인지 확인 (979-11로 시작하는 신 한국 ISBN)
+        is_korean_book = isbn.startswith('979') or isbn.startswith('978') and len(isbn) >= 5 and isbn[3:5] in ['89', '11']
         
-        # 네이버 API로도 시도
-        books = self._search_naver_books_by_isbn(isbn)
-        if books:
-            print(f"  네이버 Books ISBN 검색 성공: {len(books)}권")
-            return books
+        if is_korean_book:
+            print(f"  한국 도서로 판단, 네이버 우선 검색")
+            # 한국 도서면 네이버 먼저
+            books = self._search_naver_books_by_isbn(isbn)
+            if books:
+                print(f"  네이버 Books ISBN 검색 성공: {len(books)}권")
+                return books
             
-        print(f"  ISBN 검색 실패: {isbn}")
+            # 네이버 실패시 Google Books 시도
+            books = self._search_google_books_by_isbn(isbn)
+            if books:
+                print(f"  Google Books ISBN 검색 성공: {len(books)}권")
+                return books
+        else:
+            print(f"  해외 도서로 판단, Google Books 우선 검색")
+            # 해외 도서면 Google Books 먼저
+            books = self._search_google_books_by_isbn(isbn)
+            if books:
+                print(f"  Google Books ISBN 검색 성공: {len(books)}권")
+                return books
+            
+            # Google 실패시 네이버 시도
+            books = self._search_naver_books_by_isbn(isbn)
+            if books:
+                print(f"  네이버 Books ISBN 검색 성공: {len(books)}권")
+                return books
+            
+        print(f"  모든 ISBN 전용 검색 실패: {isbn}")
         return []
     
     def _search_google_books_by_isbn(self, isbn):
-        """Google Books API로 ISBN 검색"""
-        try:
-            # ISBN으로 정확 검색
-            url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-            response = requests.get(url, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if data.get('totalItems', 0) > 0:
-                    books = []
-                    for item in data['items'][:3]:  # 상위 3개 결과
-                        volume_info = item.get('volumeInfo', {})
-                        
-                        book_info = {
-                            'title': volume_info.get('title', 'Unknown'),
-                            'authors': ', '.join(volume_info.get('authors', ['Unknown'])),
-                            'publisher': volume_info.get('publisher', 'Unknown'),
-                            'published_date': volume_info.get('publishedDate', 'Unknown'),
-                            'description': volume_info.get('description', ''),
-                            'thumbnail_url': volume_info.get('imageLinks', {}).get('thumbnail', ''),
-                            'isbn': isbn,
-                            'api_source': 'google_isbn',
-                            'similarity_score': 1.0  # ISBN은 정확 매칭
-                        }
-                        books.append(book_info)
-                    
-                    return books
-                    
-        except Exception as e:
-            print(f"Google Books ISBN 검색 오류: {e}")
+        """Google Books API로 ISBN 검색 - 개선된 검색"""
+        books = []
         
+        # 여러 검색 방법 시도
+        search_queries = [
+            f"isbn:{isbn}",  # 정확한 ISBN 검색
+            f"isbn={isbn}",  # 다른 ISBN 형식
+            isbn             # 일반 텍스트 검색
+        ]
+        
+        for query in search_queries:
+            try:
+                print(f"  Google Books 검색 시도: {query}")
+                url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}"
+                response = requests.get(url, timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"    응답: {data.get('totalItems', 0)}개 결과")
+                    
+                    if data.get('totalItems', 0) > 0:
+                        for item in data['items'][:3]:  # 상위 3개 결과
+                            volume_info = item.get('volumeInfo', {})
+                            
+                            # ISBN 매칭 확인
+                            item_isbns = volume_info.get('industryIdentifiers', [])
+                            isbn_found = False
+                            
+                            for identifier in item_isbns:
+                                identifier_value = identifier.get('identifier', '')
+                                # ISBN 정확 매칭 또는 부분 매칭
+                                if isbn in identifier_value or identifier_value in isbn:
+                                    isbn_found = True
+                                    break
+                            
+                            # ISBN이 매칭되지 않으면 제목으로라도 확인
+                            if not isbn_found and query == isbn:
+                                print(f"    ISBN 매칭 실패하지만 일반 검색 결과 사용")
+                                isbn_found = True
+                            
+                            if isbn_found:
+                                book_info = {
+                                    'title': volume_info.get('title', 'Unknown'),
+                                    'authors': ', '.join(volume_info.get('authors', ['Unknown'])),
+                                    'publisher': volume_info.get('publisher', 'Unknown'),
+                                    'published_date': volume_info.get('publishedDate', 'Unknown'),
+                                    'description': volume_info.get('description', ''),
+                                    'thumbnail_url': volume_info.get('imageLinks', {}).get('thumbnail', ''),
+                                    'isbn': isbn,
+                                    'api_source': f'google_isbn_{query}',
+                                    'similarity_score': 1.0 if isbn_found else 0.8
+                                }
+                                books.append(book_info)
+                                print(f"    찾은 책: {book_info['title']} by {book_info['authors']}")
+                        
+                        if books:
+                            print(f"  Google Books 성공: {len(books)}권 찾음")
+                            return books
+                            
+            except Exception as e:
+                print(f"    검색 오류 ({query}): {e}")
+                continue
+        
+        print(f"  Google Books ISBN 검색 실패: {isbn}")
         return []
     
     def _search_naver_books_by_isbn(self, isbn):
-        """네이버 Books API로 ISBN 검색"""
+        """네이버 Books API로 ISBN 검색 - 개선된 검색"""
         if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+            print("  네이버 API 키 없음, 건너뜀")
             return []
-            
-        try:
-            url = "https://openapi.naver.com/v1/search/book.json"
-            headers = {
-                'X-Naver-Client-Id': NAVER_CLIENT_ID,
-                'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
-            }
-            params = {
-                'query': isbn,
-                'display': 3,
-                'start': 1,
-                'sort': 'sim'
-            }
-            
-            response = requests.get(url, headers=headers, params=params, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                books = []
-                
-                for item in data.get('items', []):
-                    # ISBN이 실제로 일치하는지 확인
-                    item_isbn = item.get('isbn', '')
-                    if isbn in item_isbn or item_isbn in isbn:
-                        book_info = {
-                            'title': self._clean_html_tags(item.get('title', 'Unknown')),
-                            'authors': self._clean_html_tags(item.get('author', 'Unknown')),
-                            'publisher': self._clean_html_tags(item.get('publisher', 'Unknown')),
-                            'published_date': item.get('pubdate', 'Unknown'),
-                            'description': self._clean_html_tags(item.get('description', '')),
-                            'thumbnail_url': item.get('image', ''),
-                            'isbn': isbn,
-                            'kyobo_link': item.get('link', ''),
-                            'api_source': 'naver_isbn',
-                            'similarity_score': 1.0  # ISBN은 정확 매칭
-                        }
-                        books.append(book_info)
-                
-                return books
-                
-        except Exception as e:
-            print(f"네이버 Books ISBN 검색 오류: {e}")
         
+        # 여러 검색 방법 시도
+        search_queries = [
+            isbn,                  # 원본 ISBN
+            isbn.replace('-', ''), # 하이픈 제거
+            f"isbn:{isbn}",       # 명시적 ISBN 검색
+        ]
+        
+        for query in search_queries:
+            try:
+                print(f"  네이버 검색 시도: {query}")
+                url = "https://openapi.naver.com/v1/search/book.json"
+                headers = {
+                    'X-Naver-Client-Id': NAVER_CLIENT_ID,
+                    'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
+                }
+                params = {
+                    'query': query,
+                    'display': 5,
+                    'start': 1,
+                    'sort': 'sim'  # 정확도순
+                }
+                
+                response = requests.get(url, headers=headers, params=params, timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    items = data.get('items', [])
+                    print(f"    응답: {len(items)}개 결과")
+                    
+                    books = []
+                    for item in items:
+                        item_isbn = item.get('isbn', '')
+                        item_title = self._clean_html_tags(item.get('title', ''))
+                        
+                        # ISBN 매칭 확인 (더 관대하게)
+                        isbn_match = False
+                        clean_input_isbn = isbn.replace('-', '').replace(' ', '')
+                        clean_item_isbn = item_isbn.replace('-', '').replace(' ', '')
+                        
+                        if clean_input_isbn and clean_item_isbn:
+                            # 전체 매칭 또는 부분 매칭
+                            if (clean_input_isbn in clean_item_isbn or 
+                                clean_item_isbn in clean_input_isbn or
+                                clean_input_isbn == clean_item_isbn):
+                                isbn_match = True
+                        
+                        # 첫 번째 쿼리에서는 모든 결과 포함 (네이버가 관련성 판단)
+                        if isbn_match or query == isbn:
+                            book_info = {
+                                'title': item_title,
+                                'authors': self._clean_html_tags(item.get('author', 'Unknown')),
+                                'publisher': self._clean_html_tags(item.get('publisher', 'Unknown')),
+                                'published_date': item.get('pubdate', 'Unknown'),
+                                'description': self._clean_html_tags(item.get('description', '')),
+                                'thumbnail_url': item.get('image', ''),
+                                'isbn': isbn,
+                                'kyobo_link': item.get('link', ''),
+                                'api_source': f'naver_isbn_{query}',
+                                'similarity_score': 1.0 if isbn_match else 0.8
+                            }
+                            books.append(book_info)
+                            print(f"    찾은 책: {item_title} (ISBN 매칭: {isbn_match})")
+                    
+                    if books:
+                        print(f"  네이버 성공: {len(books)}권 찾음")
+                        return books
+                        
+            except Exception as e:
+                print(f"    네이버 검색 오류 ({query}): {e}")
+                continue
+        
+        print(f"  네이버 ISBN 검색 실패: {isbn}")
         return []
     
     def _preprocess_title_for_search(self, title):
@@ -739,15 +821,32 @@ class BookTracker:
                     print(f"  ISBN 감지: {query} → 제목 검색 중...")
                     try:
                         books_info = self.search_by_isbn(query)
-                        if books_info:
+                        if books_info and books_info[0]['title'] != 'Unknown':
                             actual_title = books_info[0]['title']
-                            print(f"  실제 제목: {actual_title}")
+                            print(f"  ✓ ISBN 검색 성공: {actual_title}")
                         else:
-                            actual_title = f"ISBN {query}"  # 검색 실패 시 식별 가능한 형태
-                            print(f"  ISBN 검색 실패, 대체 제목 사용: {actual_title}")
+                            # ISBN 검색 실패 시 다른 전략 시도
+                            print(f"  ISBN 직접 검색 실패, 대체 검색 시도...")
+                            
+                            # 1. 네이버 일반 검색 시도
+                            fallback_books = self.search_naver_books(query)
+                            if fallback_books:
+                                actual_title = fallback_books[0]['title']
+                                print(f"  ✓ 네이버 일반 검색 성공: {actual_title}")
+                            else:
+                                # 2. Google 일반 검색 시도
+                                fallback_books = self.search_google_books(query)
+                                if fallback_books:
+                                    actual_title = fallback_books[0]['title']
+                                    print(f"  ✓ Google 일반 검색 성공: {actual_title}")
+                                else:
+                                    # 3. 마지막 시도: 교보문고나 알라딘 제목 추출 (웹 크롤링은 복잡하므로 일단 건너뜀)
+                                    actual_title = f"[검색실패] ISBN {query}"  # 명확한 실패 표시
+                                    print(f"  ✗ 모든 검색 실패, 수동 확인 필요: {actual_title}")
+                                    print(f"    → 교보문고나 알라딘에서 직접 확인: {query}")
                     except Exception as isbn_error:
-                        actual_title = f"ISBN {query}"
-                        print(f"  ISBN 검색 오류: {str(isbn_error)}")
+                        actual_title = f"[오류] ISBN {query}"
+                        print(f"  ✗ ISBN 검색 오류: {str(isbn_error)}")
                 else:
                     actual_title = query
                 
