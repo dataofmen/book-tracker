@@ -998,6 +998,99 @@ def update_book_details(book_id):
             'error': f'상세정보 업데이트 중 오류: {str(e)}'
         }), 500
 
+@app.route('/smart_update_details', methods=['POST'])
+def smart_update_details():
+    """스마트 업데이트: 사용자 지정 개수만큼 처리"""
+    try:
+        data = request.get_json() or {}
+        update_count = data.get('count', 10)  # 기본 10권
+        
+        # Unknown 상태인 책들만 필터링
+        all_books = book_tracker.get_all_books()
+        unknown_books = [book for book in all_books if book['authors'] == 'Unknown']
+        
+        if not unknown_books:
+            return jsonify({
+                'success': True,
+                'message': '업데이트할 책이 없습니다',
+                'results': {'success': 0, 'errors': 0, 'total': 0}
+            })
+        
+        # 지정된 개수만큼만 처리
+        books_to_update = unknown_books[:update_count]
+        remaining_count = len(unknown_books) - len(books_to_update)
+        
+        results = {
+            'success': [],
+            'errors': [],
+            'total': len(books_to_update),
+            'remaining': remaining_count
+        }
+        
+        print(f"스마트 업데이트: {len(books_to_update)}권 처리 시작")
+        
+        for i, book in enumerate(books_to_update):
+            try:
+                print(f"[{i+1}/{len(books_to_update)}] 업데이트: {book['title'][:40]}...")
+                
+                books_info = book_tracker.search_book_info(book['title'])
+                
+                if books_info and len(books_info) > 0:
+                    book_info = books_info[0]
+                    success = book_tracker.update_book_details(book['id'], book_info)
+                    
+                    if success:
+                        results['success'].append({
+                            'id': book['id'],
+                            'title': book['title'],
+                            'authors': book_info.get('authors', 'Unknown'),
+                            'publisher': book_info.get('publisher', 'Unknown')
+                        })
+                        print(f"  ✓ 성공: {book_info.get('authors', 'N/A')}")
+                    else:
+                        results['errors'].append({
+                            'title': book['title'],
+                            'reason': 'DB 업데이트 실패'
+                        })
+                        print(f"  ✗ DB 실패")
+                else:
+                    results['errors'].append({
+                        'title': book['title'],
+                        'reason': '검색 결과 없음'
+                    })
+                    print(f"  ✗ 검색 실패")
+                    
+            except Exception as e:
+                results['errors'].append({
+                    'title': book['title'],
+                    'reason': f'오류: {str(e)[:30]}'
+                })
+                print(f"  ✗ 오류: {str(e)}")
+            
+            # API 부하 방지
+            import time
+            time.sleep(0.2)
+        
+        success_count = len(results['success'])
+        error_count = len(results['errors'])
+        
+        message = f'업데이트 완료: 성공 {success_count}권, 실패 {error_count}권'
+        if remaining_count > 0:
+            message += f' (남은 Unknown 책: {remaining_count}권)'
+        
+        return jsonify({
+            'success': True,
+            'message': message,
+            'results': results
+        })
+        
+    except Exception as e:
+        print(f"스마트 업데이트 오류: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'스마트 업데이트 오류: {str(e)}'
+        }), 500
+
 @app.route('/bulk_update_details', methods=['POST'])
 def bulk_update_details():
     """Unknown 상태인 책들의 상세정보 대량 업데이트 - 배치 처리로 안정성 향상"""
@@ -1013,8 +1106,8 @@ def bulk_update_details():
                 'results': {'success': 0, 'errors': 0, 'total': 0}
             })
         
-        # 배치 설정: 한 번에 15권씩 처리 (Railway 서버 안정성 고려)
-        batch_size = 15
+        # 배치 설정: Railway HTTP 타임아웃(30초) 고려하여 5권씩 처리
+        batch_size = 5
         total_books = len(unknown_books)
         
         results = {
@@ -1096,7 +1189,7 @@ def bulk_update_details():
                 
                 # 개별 책 처리 간 짧은 대기 (API 부하 방지)
                 import time
-                time.sleep(0.3)
+                time.sleep(0.1)
             
             # 배치 결과 저장
             results['batches'].append(batch_results)
@@ -1104,7 +1197,7 @@ def bulk_update_details():
             
             # 배치 간 대기 (서버 부하 방지)
             if current_batch < total_batches:
-                time.sleep(1.0)
+                time.sleep(0.5)
         
         success_count = len(results['success'])
         error_count = len(results['errors'])
