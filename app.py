@@ -108,7 +108,7 @@ class BookTracker:
                 'sort': 'sim'  # 정확도순
             }
             
-            response = requests.get(url, headers=headers, params=params, timeout=5)
+            response = requests.get(url, headers=headers, params=params, timeout=3)
             
             if response.status_code == 200:
                 data = response.json()
@@ -164,7 +164,7 @@ class BookTracker:
                 'sort': 'sim'
             }
             
-            response = requests.get(url, headers=headers, params=params, timeout=5)
+            response = requests.get(url, headers=headers, params=params, timeout=3)
             
             if response.status_code == 200:
                 data = response.json()
@@ -191,7 +191,7 @@ class BookTracker:
         try:
             # Google Books API 호출
             url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}"
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, timeout=3)
             
             if response.status_code == 200:
                 data = response.json()
@@ -356,7 +356,7 @@ class BookTracker:
         return False
     
     def bulk_add_books(self, book_titles, progress_callback=None):
-        """대량 책 추가"""
+        """대량 책 추가 - 강화된 오류 처리"""
         results = {
             'success': [],
             'duplicates': [],
@@ -370,45 +370,64 @@ class BookTracker:
                 continue
                 
             try:
+                print(f"처리 중 ({i+1}/{len(book_titles)}): {title[:50]}...")
+                
                 # 진행률 콜백 호출
                 if progress_callback:
                     progress_callback(i + 1, len(book_titles), title)
                 
                 # 중복 검사
-                if self.check_duplicate(title):
-                    results['duplicates'].append({
-                        'title': title,
-                        'reason': '이미 등록된 책입니다'
-                    })
-                    continue
+                try:
+                    if self.check_duplicate(title):
+                        results['duplicates'].append({
+                            'title': title,
+                            'reason': '이미 등록된 책입니다'
+                        })
+                        continue
+                except Exception as dup_error:
+                    print(f"중복 검사 오류: {str(dup_error)}")
+                    # 중복 검사 실패해도 계속 진행
                 
-                # 책 정보 검색 - 타임아웃과 재시도 로직 추가
+                # 책 정보 검색 - 더 강력한 재시도 로직
                 books = None
-                max_retries = 2
+                max_retries = 3
                 
                 for retry in range(max_retries):
                     try:
+                        # 타임아웃 시간 단축
                         books = self.search_book_info(title)
                         if books:
                             break
+                        else:
+                            print(f"검색 결과 없음 (시도 {retry+1}/{max_retries}): {title}")
                     except Exception as search_error:
+                        print(f"검색 오류 (시도 {retry+1}/{max_retries}): {str(search_error)}")
                         if retry == max_retries - 1:
                             # 마지막 시도에서도 실패하면 오류로 기록
                             raise search_error
                         # 잠시 대기 후 재시도
                         import time
-                        time.sleep(1)
+                        time.sleep(0.5)  # 대기시간 단축
                 
-                if books:
-                    # 첫 번째 검색 결과 사용
-                    book_info = books[0]
-                    book_id = self.add_book(book_info)
-                    
-                    results['success'].append({
-                        'title': book_info['title'],
-                        'authors': book_info['authors'],
-                        'id': book_id
-                    })
+                if books and len(books) > 0:
+                    try:
+                        # 첫 번째 검색 결과 사용
+                        book_info = books[0]
+                        book_id = self.add_book(book_info)
+                        
+                        results['success'].append({
+                            'title': book_info['title'],
+                            'authors': book_info['authors'],
+                            'id': book_id
+                        })
+                        print(f"추가 성공: {book_info['title']}")
+                        
+                    except Exception as add_error:
+                        print(f"DB 추가 오류: {str(add_error)}")
+                        results['errors'].append({
+                            'title': title,
+                            'reason': f'데이터베이스 추가 실패: {str(add_error)}'
+                        })
                 else:
                     results['errors'].append({
                         'title': title,
@@ -418,13 +437,21 @@ class BookTracker:
             except Exception as e:
                 # 상세한 오류 정보 기록
                 import traceback
-                error_msg = f"{str(e)} (상세: {traceback.format_exc().split(chr(10))[-3] if len(traceback.format_exc().split(chr(10))) > 2 else str(e)})"
+                error_trace = traceback.format_exc()
+                print(f"책 처리 중 예외: {title} - {str(e)}")
+                print(f"상세 오류: {error_trace}")
                 
                 results['errors'].append({
                     'title': title,
                     'reason': f'처리 중 오류: {str(e)}'
                 })
+            
+            # 서버 부하 방지를 위한 짧은 대기
+            if i > 0 and i % 5 == 0:  # 5권마다 잠시 대기
+                import time
+                time.sleep(0.1)
         
+        print(f"벌크 처리 완료: 성공 {len(results['success'])}, 중복 {len(results['duplicates'])}, 실패 {len(results['errors'])}")
         return results
     
     def bulk_add_books_batch(self, book_titles, batch_size=50):
@@ -686,7 +713,7 @@ def bulk_add():
 
 @app.route('/bulk_add_csv', methods=['POST'])
 def bulk_add_csv():
-    """CSV 파일 대량 추가"""
+    """CSV 파일 대량 추가 - 강화된 오류 처리"""
     try:
         if 'csv_file' not in request.files:
             return jsonify({'error': 'CSV 파일을 업로드해주세요'}), 400
@@ -713,6 +740,7 @@ def bulk_add_csv():
         for encoding in ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'latin1']:
             try:
                 csv_content = raw_content.decode(encoding)
+                print(f"CSV 파일 인코딩 감지: {encoding}")
                 break
             except UnicodeDecodeError:
                 continue
@@ -721,7 +749,12 @@ def bulk_add_csv():
             return jsonify({'error': 'CSV 파일 인코딩을 읽을 수 없습니다. UTF-8로 저장해주세요'}), 400
         
         # CSV 파싱
-        titles = book_tracker.parse_csv_content(csv_content)
+        try:
+            titles = book_tracker.parse_csv_content(csv_content)
+            print(f"CSV 파싱 완료: {len(titles)}개 제목 추출")
+        except Exception as parse_error:
+            print(f"CSV 파싱 오류: {str(parse_error)}")
+            return jsonify({'error': f'CSV 파싱 실패: {str(parse_error)}'}), 400
         
         if not titles:
             return jsonify({'error': 'CSV 파일에서 책 제목을 찾을 수 없습니다'}), 400
@@ -730,27 +763,42 @@ def bulk_add_csv():
         if len(titles) > 500:
             return jsonify({'error': '한 번에 최대 500권까지 처리할 수 있습니다. 500권씩 나누어서 처리해주세요'}), 400
         
-        # 대용량 처리 (100권 이상이면 배치 처리)
-        if len(titles) > 100:
-            results = book_tracker.bulk_add_books_batch(titles, batch_size=25)
-        else:
-            results = book_tracker.bulk_add_books(titles)
+        # 서버 환경을 고려한 더 작은 배치 사이즈 사용
+        try:
+            if len(titles) > 50:
+                print(f"대용량 배치 처리 시작: {len(titles)}권을 10권씩 나누어 처리")
+                results = book_tracker.bulk_add_books_batch(titles, batch_size=10)
+            else:
+                print(f"소량 처리: {len(titles)}권 일괄 처리")
+                results = book_tracker.bulk_add_books(titles)
+            
+            print(f"처리 완료: 성공 {len(results['success'])}권, 오류 {len(results['errors'])}권")
+            
+        except Exception as process_error:
+            print(f"벌크 처리 중 오류: {str(process_error)}")
+            import traceback
+            print(f"상세 오류: {traceback.format_exc()}")
+            
+            return jsonify({
+                'success': False,
+                'error': f'책 처리 중 오류가 발생했습니다: {str(process_error)}'
+            }), 500
         
         return jsonify({
             'success': True,
             'results': results,
-            'message': f'총 {results["total"]}권 처리 완료'
+            'message': f'총 {results["total"]}권 처리 완료 (성공: {len(results["success"])}권, 실패: {len(results["errors"])}권)'
         })
         
     except Exception as e:
         # 더 자세한 오류 정보 제공
         import traceback
         error_details = traceback.format_exc()
-        print(f"CSV 업로드 오류: {error_details}")  # 서버 로그용
+        print(f"CSV 업로드 최상위 오류: {error_details}")  # 서버 로그용
         
         return jsonify({
             'success': False,
-            'error': f'CSV 처리 중 오류가 발생했습니다: {str(e)}'
+            'error': f'CSV 처리 중 예상치 못한 오류가 발생했습니다: {str(e)}'
         }), 500
 
 @app.route('/bulk_add_text', methods=['POST'])
