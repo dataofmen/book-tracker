@@ -384,28 +384,29 @@ class BookTracker:
             return False, f'삭제 중 오류가 발생했습니다: {str(e)}'
     
     def check_duplicate(self, title, isbn=None):
-        """중복 도서 검사"""
+        """중복 도서 검사 - 완전 일치만 중복으로 처리"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        if isbn:
+        if isbn and isbn.strip():
             cursor.execute('SELECT * FROM books WHERE isbn = ? AND isbn != ""', (isbn,))
             result = cursor.fetchone()
             if result:
                 conn.close()
                 return True
         
-        # 제목으로 유사도 검사 (간단한 문자열 매칭)
+        # 제목으로 완전 일치 검사만 (공백, 대소문자 정규화)
         cursor.execute('SELECT title FROM books')
         existing_titles = [row[0] for row in cursor.fetchall()]
         
         conn.close()
         
-        # 간단한 중복 검사 (대소문자 무시, 공백 제거)
-        clean_title = title.lower().replace(' ', '').replace('　', '')
+        # 간단한 정규화 후 완전 일치만 중복으로 처리
+        clean_title = title.strip().lower().replace(' ', '').replace('　', '')
+        
         for existing in existing_titles:
-            clean_existing = existing.lower().replace(' ', '').replace('　', '')
-            if clean_title in clean_existing or clean_existing in clean_title:
+            clean_existing = existing.strip().lower().replace(' ', '').replace('　', '')
+            if clean_title == clean_existing:
                 return True
         
         return False
@@ -696,9 +697,12 @@ book_tracker = BookTracker()
 
 # Jinja2 커스텀 필터 추가
 @app.template_filter('selectattr')
-def selectattr_filter(items, attribute):
+def selectattr_filter(items, attribute, test=None, value=None):
     """selectattr 필터 구현"""
-    return [item for item in items if item.get(attribute) is not None]
+    if test == 'equalto':
+        return [item for item in items if item.get(attribute) == value]
+    else:
+        return [item for item in items if item.get(attribute) is not None]
 
 @app.template_filter('map')
 def map_filter(items, attribute):
