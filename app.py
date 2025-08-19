@@ -1000,7 +1000,7 @@ def update_book_details(book_id):
 
 @app.route('/bulk_update_details', methods=['POST'])
 def bulk_update_details():
-    """Unknown 상태인 책들의 상세정보 대량 업데이트"""
+    """Unknown 상태인 책들의 상세정보 대량 업데이트 - 배치 처리로 안정성 향상"""
     try:
         # Unknown 상태인 책들만 필터링
         all_books = book_tracker.get_all_books()
@@ -1013,64 +1013,119 @@ def bulk_update_details():
                 'results': {'success': 0, 'errors': 0, 'total': 0}
             })
         
+        # 배치 설정: 한 번에 15권씩 처리 (Railway 서버 안정성 고려)
+        batch_size = 15
+        total_books = len(unknown_books)
+        
         results = {
             'success': [],
             'errors': [],
-            'total': len(unknown_books)
+            'total': total_books,
+            'batches': []
         }
         
-        for i, book in enumerate(unknown_books):
-            try:
-                print(f"상세정보 업데이트 중 ({i+1}/{len(unknown_books)}): {book['title']}")
+        print(f"대량 업데이트 시작: {total_books}권을 {batch_size}권씩 배치 처리")
+        
+        # 배치 단위로 처리
+        for batch_start in range(0, total_books, batch_size):
+            batch_end = min(batch_start + batch_size, total_books)
+            batch_books = unknown_books[batch_start:batch_end]
+            current_batch = (batch_start // batch_size) + 1
+            total_batches = (total_books + batch_size - 1) // batch_size
+            
+            batch_results = {
+                'batch_num': current_batch,
+                'total_batches': total_batches,
+                'success_count': 0,
+                'error_count': 0
+            }
+            
+            print(f"배치 {current_batch}/{total_batches} 처리 시작 ({len(batch_books)}권)")
+            
+            # 배치 내 각 책 처리
+            for local_idx, book in enumerate(batch_books):
+                global_idx = batch_start + local_idx + 1
                 
-                # API 검색
-                books_info = book_tracker.search_book_info(book['title'])
-                
-                if books_info:
-                    book_info = books_info[0]
-                    success = book_tracker.update_book_details(book['id'], book_info)
+                try:
+                    print(f"  [{global_idx}/{total_books}] 업데이트: {book['title'][:40]}...")
                     
-                    if success:
-                        results['success'].append({
-                            'id': book['id'],
-                            'title': book_info['title'],
-                            'authors': book_info['authors']
-                        })
+                    # API 검색 (타임아웃 짧게 설정)
+                    books_info = book_tracker.search_book_info(book['title'])
+                    
+                    if books_info and len(books_info) > 0:
+                        book_info = books_info[0]
+                        
+                        # 데이터베이스 업데이트
+                        success = book_tracker.update_book_details(book['id'], book_info)
+                        
+                        if success:
+                            results['success'].append({
+                                'id': book['id'],
+                                'title': book['title'],
+                                'authors': book_info.get('authors', 'Unknown'),
+                                'publisher': book_info.get('publisher', 'Unknown')
+                            })
+                            batch_results['success_count'] += 1
+                            print(f"    ✓ 성공: {book_info.get('authors', 'N/A')}")
+                        else:
+                            results['errors'].append({
+                                'id': book['id'],
+                                'title': book['title'],
+                                'reason': 'DB 업데이트 실패'
+                            })
+                            batch_results['error_count'] += 1
+                            print(f"    ✗ DB 업데이트 실패")
                     else:
                         results['errors'].append({
                             'id': book['id'],
                             'title': book['title'],
-                            'reason': '데이터베이스 업데이트 실패'
+                            'reason': '검색 결과 없음'
                         })
-                else:
+                        batch_results['error_count'] += 1
+                        print(f"    ✗ 검색 결과 없음")
+                        
+                except Exception as e:
+                    error_msg = str(e)
                     results['errors'].append({
                         'id': book['id'],
                         'title': book['title'],
-                        'reason': '검색 결과 없음'
+                        'reason': f'오류: {error_msg[:50]}'
                     })
-                    
-            except Exception as e:
-                results['errors'].append({
-                    'id': book['id'],
-                    'title': book['title'],
-                    'reason': f'오류: {str(e)}'
-                })
-            
-            # 서버 부하 방지
-            if i > 0 and i % 5 == 0:
+                    batch_results['error_count'] += 1
+                    print(f"    ✗ 오류: {error_msg}")
+                
+                # 개별 책 처리 간 짧은 대기 (API 부하 방지)
                 import time
-                time.sleep(0.5)
+                time.sleep(0.3)
+            
+            # 배치 결과 저장
+            results['batches'].append(batch_results)
+            print(f"배치 {current_batch} 완료: 성공 {batch_results['success_count']}, 실패 {batch_results['error_count']}")
+            
+            # 배치 간 대기 (서버 부하 방지)
+            if current_batch < total_batches:
+                time.sleep(1.0)
+        
+        success_count = len(results['success'])
+        error_count = len(results['errors'])
+        
+        print(f"대량 업데이트 완료: 성공 {success_count}권, 실패 {error_count}권")
         
         return jsonify({
             'success': True,
-            'message': f'상세정보 업데이트 완료: 성공 {len(results["success"])}권, 실패 {len(results["errors"])}권',
+            'message': f'대량 업데이트 완료: 성공 {success_count}권, 실패 {error_count}권 (총 {total_books}권)',
             'results': results
         })
         
     except Exception as e:
+        error_msg = str(e)
+        print(f"대량 업데이트 시스템 오류: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        
         return jsonify({
             'success': False,
-            'error': f'대량 업데이트 중 오류: {str(e)}'
+            'error': f'시스템 오류 발생: {error_msg}'
         }), 500
 
 if __name__ == '__main__':
