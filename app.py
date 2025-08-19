@@ -396,6 +396,53 @@ class BookTracker:
         
         return results
     
+    def bulk_add_books_batch(self, book_titles, batch_size=50):
+        """배치 단위로 대량 책 추가 - 435권 같은 대용량 처리용"""
+        results = {
+            'success': [],
+            'duplicates': [],
+            'errors': [],
+            'total': len(book_titles),
+            'processed': 0,
+            'batches': []
+        }
+        
+        # 배치로 나누기
+        total_books = len(book_titles)
+        
+        for batch_start in range(0, total_books, batch_size):
+            batch_end = min(batch_start + batch_size, total_books)
+            batch_titles = book_titles[batch_start:batch_end]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total_books + batch_size - 1) // batch_size
+            
+            print(f"배치 {batch_num}/{total_batches} 처리 중... ({len(batch_titles)}권)")
+            
+            # 각 배치 처리
+            batch_results = self.bulk_add_books(batch_titles)
+            
+            # 결과 합치기
+            results['success'].extend(batch_results['success'])
+            results['duplicates'].extend(batch_results['duplicates'])
+            results['errors'].extend(batch_results['errors'])
+            results['processed'] += len(batch_titles)
+            
+            # 배치별 결과 기록
+            results['batches'].append({
+                'batch_num': batch_num,
+                'total_batches': total_batches,
+                'success_count': len(batch_results['success']),
+                'duplicate_count': len(batch_results['duplicates']),
+                'error_count': len(batch_results['errors'])
+            })
+            
+            # 배치 간 잠시 대기 (서버 부하 방지)
+            if batch_end < total_books:
+                import time
+                time.sleep(2)
+        
+        return results
+    
     def parse_csv_content(self, csv_content):
         """CSV 내용 파싱"""
         titles = []
@@ -565,12 +612,15 @@ def bulk_add_csv():
         if not titles:
             return jsonify({'error': 'CSV 파일에서 책 제목을 찾을 수 없습니다'}), 400
         
-        # 제목 개수 제한 (한 번에 너무 많이 처리하지 않도록)
-        if len(titles) > 100:
-            return jsonify({'error': '한 번에 최대 100권까지만 처리할 수 있습니다'}), 400
+        # 대용량 처리를 위한 배치 시스템
+        if len(titles) > 500:
+            return jsonify({'error': '한 번에 최대 500권까지 처리할 수 있습니다. 500권씩 나누어서 처리해주세요'}), 400
         
-        # 대량 추가 실행
-        results = book_tracker.bulk_add_books(titles)
+        # 대용량 처리 (100권 이상이면 배치 처리)
+        if len(titles) > 100:
+            results = book_tracker.bulk_add_books_batch(titles, batch_size=25)
+        else:
+            results = book_tracker.bulk_add_books(titles)
         
         return jsonify({
             'success': True,
@@ -612,12 +662,15 @@ def bulk_add_text():
         if not titles:
             return jsonify({'error': '유효한 책 제목을 찾을 수 없습니다'}), 400
         
-        # 제목 개수 제한
-        if len(titles) > 100:
-            return jsonify({'error': '한 번에 최대 100권까지만 처리할 수 있습니다'}), 400
+        # 대용량 처리를 위한 배치 시스템
+        if len(titles) > 500:
+            return jsonify({'error': '한 번에 최대 500권까지 처리할 수 있습니다. 500권씩 나누어서 처리해주세요'}), 400
         
-        # 대량 추가 실행
-        results = book_tracker.bulk_add_books(titles)
+        # 대용량 처리 (100권 이상이면 배치 처리)
+        if len(titles) > 100:
+            results = book_tracker.bulk_add_books_batch(titles, batch_size=25)
+        else:
+            results = book_tracker.bulk_add_books(titles)
         
         return jsonify({
             'success': True,

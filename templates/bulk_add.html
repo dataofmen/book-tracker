@@ -29,7 +29,9 @@
                     <ul class="mb-0">
                         <li>첫 번째 컬럼: 책 제목</li>
                         <li>헤더가 있어도 자동으로 제외됩니다</li>
-                        <li>인코딩: UTF-8 권장</li>
+                        <li>인코딩: UTF-8, CP949, EUC-KR 지원</li>
+                        <li><strong>대용량:</strong> 최대 500권까지 지원</li>
+                        <li><strong>자동 배치:</strong> 100권 이상시 25권씩 나누어 처리</li>
                     </ul>
                 </div>
 
@@ -65,6 +67,8 @@
                         <li>한 줄에 책 제목 하나씩</li>
                         <li>빈 줄은 자동으로 제외됩니다</li>
                         <li>한국어/영어 자동 감지</li>
+                        <li><strong>대용량:</strong> 최대 500권까지 지원</li>
+                        <li><strong>자동 배치:</strong> 100권 이상시 25권씩 나누어 처리</li>
                     </ul>
                 </div>
 
@@ -249,7 +253,7 @@ function hideProgressModal() {
 }
 
 function showResults(results) {
-    const { success, duplicates, errors, total } = results;
+    const { success, duplicates, errors, total, processed, batches } = results;
     
     let resultHtml = `
         <div class="row mb-4">
@@ -291,6 +295,43 @@ function showResults(results) {
             </div>
         </div>
     `;
+    
+    // 배치 처리 정보 표시 (100권 이상일 때)
+    if (batches && batches.length > 1) {
+        resultHtml += `
+            <div class="mb-4">
+                <h5 class="text-info">
+                    <i class="fas fa-layer-group"></i> 배치 처리 정보
+                </h5>
+                <div class="alert alert-info">
+                    <strong>대용량 처리:</strong> ${total}권을 ${batches.length}개 배치로 나누어 처리했습니다.
+                    ${processed ? `(총 ${processed}권 처리 완료)` : ''}
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>배치</th>
+                                <th>성공</th>
+                                <th>중복</th>
+                                <th>실패</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${batches.map(batch => `
+                                <tr>
+                                    <td>배치 ${batch.batch_num}/${batch.total_batches}</td>
+                                    <td><span class="badge bg-success">${batch.success_count}</span></td>
+                                    <td><span class="badge bg-warning">${batch.duplicate_count}</span></td>
+                                    <td><span class="badge bg-danger">${batch.error_count}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
     
     // 성공한 책들
     if (success.length > 0) {
