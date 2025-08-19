@@ -70,23 +70,103 @@ class BookTracker:
         return bool(korean_pattern.search(text))
     
     def search_book_info(self, query):
-        """언어별 API 선택하여 도서 정보 검색"""
-        is_korean = self.detect_language(query)
+        """언어별 API 선택하여 도서 정보 검색 - 정확도 개선"""
+        # 검색용 제목 전처리
+        clean_query = self._preprocess_title_for_search(query)
+        is_korean = self.detect_language(clean_query)
+        
+        print(f"원본 제목: '{query}' -> 검색용: '{clean_query}'")
         
         if is_korean:
             # 한국어 제목: 네이버 Books API 사용
-            books = self.search_naver_books(query)
+            books = self.search_naver_books(clean_query)
+            if books:
+                # 결과 필터링 및 검증
+                books = self._filter_search_results(books, query)
+            
             if not books:
-                # 네이버에서 결과가 없으면 Google Books API도 시도
-                books = self.search_google_books(query)
+                # 네이버에서 적합한 결과가 없으면 Google Books API도 시도
+                books = self.search_google_books(clean_query)
+                if books:
+                    books = self._filter_search_results(books, query)
         else:
             # 영어 제목: Google Books API 사용
-            books = self.search_google_books(query)
+            books = self.search_google_books(clean_query)
+            if books:
+                books = self._filter_search_results(books, query)
+                
             if not books:
-                # Google에서 결과가 없으면 네이버 API도 시도
-                books = self.search_naver_books(query)
+                # Google에서 적합한 결과가 없으면 네이버 API도 시도
+                books = self.search_naver_books(clean_query)
+                if books:
+                    books = self._filter_search_results(books, query)
         
         return books
+    
+    def _preprocess_title_for_search(self, title):
+        """검색용 제목 전처리 - 부제목, 설명문 제거"""
+        if not title:
+            return ""
+        
+        # 괄호 안의 설명문 제거 (너무 긴 설명은 검색 방해)
+        # 예: "달리기를 말할 때 내가 하고 싶은 이야기 (세계적 작가 하루키의...)" -> "달리기를 말할 때 내가 하고 싶은 이야기"
+        clean_title = re.sub(r'\([^)]{20,}\)', '', title)  # 20자 이상의 긴 설명만 제거
+        
+        # 하이픈이나 콜론 뒤의 부제목 제거 (단, 너무 짧지 않은 경우만)
+        if len(clean_title) > 10:
+            # " - ", " : ", " ― " 등으로 구분된 부제목 제거
+            patterns = [r'\s*[-:―]\s*[^-:―]{10,}$', r'\s*-\s*[^-]{15,}$']
+            for pattern in patterns:
+                if re.search(pattern, clean_title):
+                    clean_title = re.sub(pattern, '', clean_title)
+                    break
+        
+        # 연속된 공백 정리
+        clean_title = re.sub(r'\s+', ' ', clean_title).strip()
+        
+        # 너무 짧아지면 원본 사용
+        if len(clean_title) < 3:
+            clean_title = title
+        
+        return clean_title
+    
+    def _filter_search_results(self, books, original_title):
+        """검색 결과 필터링 - 제목 유사성 검증"""
+        if not books:
+            return books
+        
+        # 원본 제목에서 핵심 키워드 추출
+        original_clean = re.sub(r'[^\w\s가-힣]', ' ', original_title.lower()).strip()
+        original_words = set(original_clean.split())
+        
+        filtered_books = []
+        
+        for book in books:
+            result_title = book.get('title', '').lower()
+            result_clean = re.sub(r'[^\w\s가-힣]', ' ', result_title).strip()
+            result_words = set(result_clean.split())
+            
+            # 공통 단어 비율 계산
+            if original_words and result_words:
+                common_words = original_words.intersection(result_words)
+                similarity = len(common_words) / min(len(original_words), len(result_words))
+                
+                print(f"  유사도 {similarity:.2f}: '{book.get('title')}' by {book.get('authors')}")
+                
+                # 유사도 0.3 이상만 허용 (30% 이상 단어 일치)
+                if similarity >= 0.3:
+                    book['similarity_score'] = similarity
+                    filtered_books.append(book)
+            else:
+                # 단어 분석이 불가능한 경우 원본 포함
+                book['similarity_score'] = 0.5
+                filtered_books.append(book)
+        
+        # 유사도 순으로 정렬
+        filtered_books.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+        
+        print(f"  필터링 결과: {len(books)} -> {len(filtered_books)}권")
+        return filtered_books
     
     def search_naver_books(self, query):
         """네이버 Books API로 도서 정보 검색"""
