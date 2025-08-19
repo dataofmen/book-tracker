@@ -70,14 +70,19 @@ class BookTracker:
         return bool(korean_pattern.search(text))
     
     def search_book_info(self, query):
-        """언어별 API 선택하여 도서 정보 검색 - 정확도 개선 및 ISBN 지원"""
+        """언어별 API 선택하여 도서 정보 검색 - 단순화된 ISBN 지원"""
         
-        # ISBN 번호인지 확인 (10자리 또는 13자리 숫자)
+        # ISBN 번호인지 확인 (개별 검색에서만 지원)
         if self._is_isbn(query):
-            print(f"ISBN 검색: {query}")
-            books = self.search_by_isbn(query)
-            if books:
-                return books
+            print(f"개별 ISBN 검색: {query}")
+            try:
+                books = self.search_by_isbn(query)
+                if books:
+                    return books
+                else:
+                    print(f"ISBN 검색 실패, 일반 검색으로 대체")
+            except Exception as e:
+                print(f"ISBN 검색 오류: {e}, 일반 검색으로 대체")
         
         # 일반 제목 검색
         # 검색용 제목 전처리
@@ -816,39 +821,9 @@ class BookTracker:
             try:
                 print(f"안전 모드 처리 ({i+1}/{len(book_titles)}): {query[:50]}...")
                 
-                # ISBN인지 확인하고 실제 제목 찾기
-                if self._is_isbn(query):
-                    print(f"  ISBN 감지: {query} → 제목 검색 중...")
-                    try:
-                        books_info = self.search_by_isbn(query)
-                        if books_info and books_info[0]['title'] != 'Unknown':
-                            actual_title = books_info[0]['title']
-                            print(f"  ✓ ISBN 검색 성공: {actual_title}")
-                        else:
-                            # ISBN 검색 실패 시 다른 전략 시도
-                            print(f"  ISBN 직접 검색 실패, 대체 검색 시도...")
-                            
-                            # 1. 네이버 일반 검색 시도
-                            fallback_books = self.search_naver_books(query)
-                            if fallback_books:
-                                actual_title = fallback_books[0]['title']
-                                print(f"  ✓ 네이버 일반 검색 성공: {actual_title}")
-                            else:
-                                # 2. Google 일반 검색 시도
-                                fallback_books = self.search_google_books(query)
-                                if fallback_books:
-                                    actual_title = fallback_books[0]['title']
-                                    print(f"  ✓ Google 일반 검색 성공: {actual_title}")
-                                else:
-                                    # 3. 마지막 시도: 교보문고나 알라딘 제목 추출 (웹 크롤링은 복잡하므로 일단 건너뜀)
-                                    actual_title = f"[검색실패] ISBN {query}"  # 명확한 실패 표시
-                                    print(f"  ✗ 모든 검색 실패, 수동 확인 필요: {actual_title}")
-                                    print(f"    → 교보문고나 알라딘에서 직접 확인: {query}")
-                    except Exception as isbn_error:
-                        actual_title = f"[오류] ISBN {query}"
-                        print(f"  ✗ ISBN 검색 오류: {str(isbn_error)}")
-                else:
-                    actual_title = query
+                # 대량 추가에서는 ISBN 검색 제거 - 안전 모드로 단순화
+                actual_title = query.strip()
+                print(f"  안전 모드: 제목 '{actual_title}' 그대로 저장")
                 
                 # 중복 검사 (실제 제목으로)
                 try:

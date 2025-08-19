@@ -27,12 +27,11 @@
                 <div class="alert alert-info">
                     <h6><i class="fas fa-info-circle"></i> CSV 파일 형식</h6>
                     <ul class="mb-0">
-                        <li>첫 번째 컬럼: <strong>책 제목</strong> 또는 <strong>ISBN 번호</strong></li>
+                        <li>첫 번째 컬럼: <strong>책 제목</strong></li>
                         <li>헤더가 있어도 자동으로 제외됩니다</li>
                         <li>인코딩: UTF-8, CP949, EUC-KR 지원</li>
                         <li><strong>대용량:</strong> 최대 500권까지 지원</li>
                         <li><strong>안전 모드:</strong> 서버 안정성을 위해 제목만 먼저 저장</li>
-                        <li><strong>ISBN 지원:</strong> 978-89-xxx-xxxx-x 또는 89xxxxxxx 형식</li>
                     </ul>
                 </div>
                 
@@ -75,22 +74,21 @@
                 <div class="alert alert-info">
                     <h6><i class="fas fa-info-circle"></i> 입력 형식</h6>
                     <ul class="mb-0">
-                        <li>한 줄에 <strong>책 제목</strong> 또는 <strong>ISBN 번호</strong> 하나씩</li>
+                        <li>한 줄에 <strong>책 제목</strong> 하나씩</li>
                         <li>빈 줄은 자동으로 제외됩니다</li>
                         <li><strong>대용량:</strong> 최대 500권까지 지원</li>
                         <li><strong>안전 모드:</strong> 제목만 먼저 저장 (서버 안정성)</li>
-                        <li><strong>ISBN 지원:</strong> 9788932473901 또는 978-89-324-7390-1</li>
                     </ul>
                 </div>
 
                 <form id="textForm">
                     <div class="mb-3">
                         <textarea class="form-control" id="bookTitles" rows="8" 
-                                  placeholder="파이썬&#10;클린 코드&#10;9788966262281&#10;978-89-6626-228-1&#10;이펙티브 자바&#10;Clean Architecture" required></textarea>
-                        <div class="form-text">책 제목 또는 ISBN 번호를 한 줄씩 입력하세요</div>
+                                  placeholder="파이썬&#10;클린 코드&#10;이펙티브 자바&#10;Clean Architecture&#10;디자인 패턴&#10;리팩터링" required></textarea>
+                        <div class="form-text">책 제목을 한 줄씩 입력하세요</div>
                     </div>
                     <button type="submit" class="btn btn-success w-100">
-                        <i class="fas fa-plus"></i> 책 제목/ISBN 일괄 추가
+                        <i class="fas fa-plus"></i> 책 제목 일괄 추가
                     </button>
                 </form>
             </div>
