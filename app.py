@@ -475,15 +475,75 @@ class BookTracker:
         return results
     
     def parse_csv_content(self, csv_content):
-        """CSV 내용 파싱"""
+        """CSV 내용 파싱 - 다중 줄 텍스트 필드 지원"""
         titles = []
-        csv_reader = csv.reader(io.StringIO(csv_content))
         
-        for row in csv_reader:
-            if row:  # 빈 행 건너뛰기
+        try:
+            # Python csv 모듈 사용 (다중 줄 텍스트 처리 지원)
+            csv_reader = csv.reader(io.StringIO(csv_content), quoting=csv.QUOTE_ALL)
+            
+            # 헤더 건너뛰기
+            header_skipped = False
+            
+            for row_num, row in enumerate(csv_reader):
+                if not row:  # 빈 행 건너뛰기
+                    continue
+                
+                # 첫 번째 행이 헤더인지 확인
+                if not header_skipped:
+                    first_cell = row[0].strip().lower()
+                    if first_cell in ['도서명', '제목', 'title', 'book_title', '책제목']:
+                        header_skipped = True
+                        continue
+                    header_skipped = True
+                
                 # 첫 번째 컬럼을 책 제목으로 사용
-                title = row[0].strip()
-                if title and title != '제목' and title != 'title':  # 헤더 제외
+                if len(row) > 0:
+                    title = row[0].strip()
+                    if title:  # 비어있지 않은 제목만 추가
+                        titles.append(title)
+                        
+        except Exception as e:
+            # CSV 파싱 실패시 간단한 라인 단위 파싱으로 대체
+            print(f"CSV 파싱 오류 ({str(e)}), 라인 단위 파싱으로 전환")
+            return self._parse_csv_fallback(csv_content)
+        
+        return titles
+    
+    def _parse_csv_fallback(self, csv_content):
+        """CSV 파싱 실패시 대체 방법"""
+        titles = []
+        lines = csv_content.split('\n')
+        
+        # 첫 번째 줄이 헤더인지 확인
+        first_line_processed = False
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 첫 번째 라인 헤더 체크
+            if not first_line_processed:
+                if line.lower().startswith(('도서명', '제목', 'title')):
+                    first_line_processed = True
+                    continue
+                first_line_processed = True
+            
+            # 쉼표로 분리해서 첫 번째 필드만 추출
+            if ',' in line:
+                # 따옴표로 둘러싸인 경우 처리
+                if line.startswith('"'):
+                    # 닫는 따옴표 찾기
+                    end_quote = line.find('",', 1)
+                    if end_quote > 0:
+                        title = line[1:end_quote].strip()
+                    else:
+                        title = line[1:].rstrip('"').strip()
+                else:
+                    title = line.split(',')[0].strip()
+                
+                if title:
                     titles.append(title)
         
         return titles
