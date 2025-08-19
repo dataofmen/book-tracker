@@ -31,8 +31,18 @@
                         <li>헤더가 있어도 자동으로 제외됩니다</li>
                         <li>인코딩: UTF-8, CP949, EUC-KR 지원</li>
                         <li><strong>대용량:</strong> 최대 500권까지 지원</li>
-                        <li><strong>자동 배치:</strong> 100권 이상시 25권씩 나누어 처리</li>
+                        <li><strong>안전 모드:</strong> 서버 안정성을 위해 제목만 먼저 저장</li>
                     </ul>
+                </div>
+                
+                <div class="alert alert-warning">
+                    <h6><i class="fas fa-shield-alt"></i> 안전 모드 동작</h6>
+                    <p class="mb-1">서버 안정성을 위해 <strong>제목만 먼저 저장</strong>합니다.</p>
+                    <small class="text-muted">
+                        • 저자, 출판사 등 상세정보는 "Unknown"으로 저장<br>
+                        • 나중에 개별 책을 클릭해서 상세정보 업데이트 가능<br>
+                        • 435권 같은 대용량도 안전하게 처리됩니다
+                    </small>
                 </div>
 
                 <form id="csvForm" enctype="multipart/form-data">
@@ -66,9 +76,8 @@
                     <ul class="mb-0">
                         <li>한 줄에 책 제목 하나씩</li>
                         <li>빈 줄은 자동으로 제외됩니다</li>
-                        <li>한국어/영어 자동 감지</li>
                         <li><strong>대용량:</strong> 최대 500권까지 지원</li>
-                        <li><strong>자동 배치:</strong> 100권 이상시 25권씩 나누어 처리</li>
+                        <li><strong>안전 모드:</strong> 제목만 먼저 저장 (서버 안정성)</li>
                     </ul>
                 </div>
 

@@ -263,6 +263,34 @@ class BookTracker:
         
         return book_id
     
+    def add_book_simple(self, title, price=None, notes=''):
+        """제목만으로 책 추가 (API 호출 없이)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO books (title, authors, publisher, published_date, isbn, 
+                             description, thumbnail_url, price, notes, kyobo_link)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            title,
+            'Unknown',  # 기본값
+            'Unknown',  # 기본값
+            'Unknown',  # 기본값
+            '',         # 기본값
+            '',         # 기본값
+            '',         # 기본값
+            price,
+            notes,
+            ''          # 기본값
+        ))
+        
+        conn.commit()
+        book_id = cursor.lastrowid
+        conn.close()
+        
+        return book_id
+    
     def get_all_books(self):
         """모든 책 목록 조회"""
         conn = sqlite3.connect(self.db_path)
@@ -452,6 +480,55 @@ class BookTracker:
                 time.sleep(0.1)
         
         print(f"벌크 처리 완료: 성공 {len(results['success'])}, 중복 {len(results['duplicates'])}, 실패 {len(results['errors'])}")
+        return results
+    
+    def bulk_add_books_safe(self, book_titles):
+        """API 호출 없이 제목만으로 안전하게 대량 추가"""
+        results = {
+            'success': [],
+            'duplicates': [],
+            'errors': [],
+            'total': len(book_titles)
+        }
+        
+        for i, title in enumerate(book_titles):
+            title = title.strip()
+            if not title:
+                continue
+                
+            try:
+                print(f"안전 모드 처리 ({i+1}/{len(book_titles)}): {title[:50]}...")
+                
+                # 중복 검사
+                try:
+                    if self.check_duplicate(title):
+                        results['duplicates'].append({
+                            'title': title,
+                            'reason': '이미 등록된 책입니다'
+                        })
+                        continue
+                except Exception as dup_error:
+                    print(f"중복 검사 실패, 계속 진행: {str(dup_error)}")
+                    # 중복 검사 실패해도 계속 진행
+                
+                # API 호출 없이 제목만으로 추가
+                book_id = self.add_book_simple(title)
+                
+                results['success'].append({
+                    'title': title,
+                    'authors': 'Unknown',
+                    'id': book_id
+                })
+                print(f"안전 추가 성공: {title}")
+                
+            except Exception as e:
+                print(f"안전 모드에서도 오류: {title} - {str(e)}")
+                results['errors'].append({
+                    'title': title,
+                    'reason': f'데이터베이스 오류: {str(e)}'
+                })
+        
+        print(f"안전 모드 처리 완료: 성공 {len(results['success'])}, 중복 {len(results['duplicates'])}, 실패 {len(results['errors'])}")
         return results
     
     def bulk_add_books_batch(self, book_titles, batch_size=50):
@@ -763,25 +840,21 @@ def bulk_add_csv():
         if len(titles) > 500:
             return jsonify({'error': '한 번에 최대 500권까지 처리할 수 있습니다. 500권씩 나누어서 처리해주세요'}), 400
         
-        # 서버 환경을 고려한 더 작은 배치 사이즈 사용
+        # 서버 안정성을 위해 안전 모드 사용 (API 호출 없이 제목만 저장)
         try:
-            if len(titles) > 50:
-                print(f"대용량 배치 처리 시작: {len(titles)}권을 10권씩 나누어 처리")
-                results = book_tracker.bulk_add_books_batch(titles, batch_size=10)
-            else:
-                print(f"소량 처리: {len(titles)}권 일괄 처리")
-                results = book_tracker.bulk_add_books(titles)
+            print(f"안전 모드로 {len(titles)}권 처리 시작 (API 호출 없이 제목만 저장)")
+            results = book_tracker.bulk_add_books_safe(titles)
             
-            print(f"처리 완료: 성공 {len(results['success'])}권, 오류 {len(results['errors'])}권")
+            print(f"안전 모드 처리 완료: 성공 {len(results['success'])}권, 오류 {len(results['errors'])}권")
             
         except Exception as process_error:
-            print(f"벌크 처리 중 오류: {str(process_error)}")
+            print(f"안전 모드에서도 오류: {str(process_error)}")
             import traceback
             print(f"상세 오류: {traceback.format_exc()}")
             
             return jsonify({
                 'success': False,
-                'error': f'책 처리 중 오류가 발생했습니다: {str(process_error)}'
+                'error': f'안전 모드에서도 오류가 발생했습니다: {str(process_error)}'
             }), 500
         
         return jsonify({
@@ -828,11 +901,8 @@ def bulk_add_text():
         if len(titles) > 500:
             return jsonify({'error': '한 번에 최대 500권까지 처리할 수 있습니다. 500권씩 나누어서 처리해주세요'}), 400
         
-        # 대용량 처리 (100권 이상이면 배치 처리)
-        if len(titles) > 100:
-            results = book_tracker.bulk_add_books_batch(titles, batch_size=25)
-        else:
-            results = book_tracker.bulk_add_books(titles)
+        # 안전 모드로 처리 (API 호출 없이 제목만 저장)
+        results = book_tracker.bulk_add_books_safe(titles)
         
         return jsonify({
             'success': True,
