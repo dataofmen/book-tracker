@@ -9,21 +9,9 @@
         <span class="badge bg-primary fs-6 me-3">총 {{ books|length }}권</span>
         {% set unknown_books = books | selectattr('authors', 'equalto', 'Unknown') | list %}
         {% if unknown_books|length > 0 %}
-        <div class="btn-group me-2" role="group">
-            <button class="btn btn-warning" onclick="smartUpdateDetails(10)">
-                <i class="fas fa-sync"></i> 스마트 업데이트 (10권)
-            </button>
-            <button type="button" class="btn btn-warning dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown">
-                <span class="visually-hidden">Toggle Dropdown</span>
-            </button>
-            <ul class="dropdown-menu">
-                <li><a class="dropdown-item" href="#" onclick="smartUpdateDetails(5)">5권씩 업데이트</a></li>
-                <li><a class="dropdown-item" href="#" onclick="smartUpdateDetails(10)">10권씩 업데이트</a></li>
-                <li><a class="dropdown-item" href="#" onclick="smartUpdateDetails(20)">20권씩 업데이트</a></li>
-                <li><hr class="dropdown-divider"></li>
-                <li><a class="dropdown-item text-danger" href="#" onclick="bulkUpdateDetails()">전체 업데이트 ({{ unknown_books|length }}권)</a></li>
-            </ul>
-        </div>
+        <button class="btn btn-warning me-2" onclick="smartUpdateDetails()">
+            <i class="fas fa-sync"></i> 10권씩 업데이트 ({{ unknown_books|length }}권 남음)
+        </button>
         {% endif %}
         <a href="{{ url_for('index') }}" class="btn btn-success">
             <i class="fas fa-plus"></i> 새 책 추가
@@ -540,9 +528,9 @@ function updateBookDetails(bookId, bookTitle) {
     });
 }
 
-// 스마트 업데이트 (지정 개수만큼)
-function smartUpdateDetails(count) {
-    if (!confirm(`Unknown 상태인 책 ${count}권의 상세정보를 업데이트하시겠습니까?`)) {
+// 10권씩 업데이트
+function smartUpdateDetails() {
+    if (!confirm('Unknown 상태인 책 10권의 상세정보를 업데이트하시겠습니까?')) {
         return;
     }
     
@@ -555,63 +543,50 @@ function smartUpdateDetails(count) {
         url: '/smart_update_details',
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({ count: count }),
+        data: JSON.stringify({ count: 10 }),
         success: function(response) {
             if (response.success) {
                 const results = response.results;
-                let message = response.message;
+                const successCount = results.success.length;
+                const errorCount = results.errors.length;
+                
+                let message = `✅ 업데이트 완료!\n\n📊 결과:\n• 성공: ${successCount}권\n• 실패: ${errorCount}권`;
+                
                 if (results.remaining > 0) {
-                    message += `\n\n계속 업데이트하려면 버튼을 다시 클릭하세요.`;
+                    message += `\n• 남은 Unknown 책: ${results.remaining}권\n\n🔄 계속 업데이트하려면 버튼을 다시 클릭하세요.`;
+                } else {
+                    message += `\n\n🎉 모든 책 업데이트 완료!`;
                 }
+                
+                // 성공한 책들 목록 표시 (처음 3권만)
+                if (successCount > 0) {
+                    message += `\n\n📚 업데이트된 책 (처음 3권):`;
+                    for (let i = 0; i < Math.min(3, results.success.length); i++) {
+                        const book = results.success[i];
+                        message += `\n• ${book.title} - ${book.authors}`;
+                    }
+                    if (successCount > 3) {
+                        message += `\n... 외 ${successCount - 3}권`;
+                    }
+                }
+                
                 alert(message);
                 location.reload();
             } else {
-                alert('스마트 업데이트 실패: ' + response.error);
+                alert('업데이트 실패: ' + response.error);
                 button.disabled = false;
                 button.innerHTML = originalHtml;
             }
         },
         error: function(xhr) {
             const error = xhr.responseJSON?.error || '서버 오류가 발생했습니다.';
-            alert('스마트 업데이트 실패: ' + error);
+            alert('업데이트 실패: ' + error);
             button.disabled = false;
             button.innerHTML = originalHtml;
         }
     });
 }
 
-// 대량 상세정보 업데이트 (전체 - 위험)
-function bulkUpdateDetails() {
-    if (!confirm('⚠️ 전체 업데이트는 시간이 매우 오래 걸리고 서버 오류가 발생할 수 있습니다.\n\n"스마트 업데이트"를 권장합니다. 그래도 전체 업데이트를 진행하시겠습니까?')) {
-        return;
-    }
-    
-    const button = event.target;
-    const originalHtml = button.innerHTML;
-    button.disabled = true;
-    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 전체 업데이트 중...';
-    
-    $.ajax({
-        url: '/bulk_update_details',
-        method: 'POST',
-        timeout: 120000, // 2분 타임아웃
-        success: function(response) {
-            if (response.success) {
-                alert(response.message);
-                location.reload();
-            } else {
-                alert('대량 업데이트 실패: ' + response.error);
-                button.disabled = false;
-                button.innerHTML = originalHtml;
-            }
-        },
-        error: function(xhr) {
-            const error = xhr.responseJSON?.error || '서버 타임아웃 또는 오류가 발생했습니다.';
-            alert('대량 업데이트 실패: ' + error + '\n\n스마트 업데이트(10권씩)를 사용해보세요.');
-            button.disabled = false;
-            button.innerHTML = originalHtml;
-        }
-    });
-}
+// 사용하지 않음 (기존 전체 업데이트는 제거됨)
 </script>
 {% endblock %}
