@@ -297,6 +297,37 @@ class BookTracker:
         conn.close()
         return books
     
+    def delete_book(self, book_id):
+        """책 삭제"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 책이 존재하는지 먼저 확인
+            cursor.execute('SELECT title FROM books WHERE id = ?', (book_id,))
+            book = cursor.fetchone()
+            
+            if not book:
+                conn.close()
+                return False, '책을 찾을 수 없습니다'
+            
+            # 책 삭제
+            cursor.execute('DELETE FROM books WHERE id = ?', (book_id,))
+            conn.commit()
+            
+            # 삭제된 행 수 확인
+            if cursor.rowcount > 0:
+                conn.close()
+                return True, f'"{book[0]}" 책이 삭제되었습니다'
+            else:
+                conn.close()
+                return False, '책 삭제에 실패했습니다'
+                
+        except Exception as e:
+            if 'conn' in locals():
+                conn.close()
+            return False, f'삭제 중 오류가 발생했습니다: {str(e)}'
+    
     def check_duplicate(self, title, isbn=None):
         """중복 도서 검사"""
         conn = sqlite3.connect(self.db_path)
@@ -564,6 +595,29 @@ def books():
     """책 목록 페이지"""
     books = book_tracker.get_all_books()
     return render_template('books.html', books=books)
+
+@app.route('/delete_book/<int:book_id>', methods=['DELETE'])
+def delete_book(book_id):
+    """책 삭제 API"""
+    try:
+        success, message = book_tracker.delete_book(book_id)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': message
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': message
+            }), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'삭제 처리 중 오류가 발생했습니다: {str(e)}'
+        }), 500
 
 @app.route('/bulk_add')
 def bulk_add():

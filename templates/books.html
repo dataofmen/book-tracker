@@ -178,10 +178,14 @@
                 </div>
                 
                 <div class="card-footer bg-transparent">
-                    <div class="text-center">
+                    <div class="d-flex justify-content-center gap-2">
                         <button class="btn btn-outline-primary btn-sm" 
                                 onclick="viewBookDetails({{ loop.index0 }})">
                             <i class="fas fa-eye"></i> 상세보기
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm" 
+                                onclick="confirmDeleteBook({{ book.id }}, '{{ book.title|replace("'", "\\'") }}')">
+                            <i class="fas fa-trash"></i> 삭제
                         </button>
                     </div>
                 </div>
@@ -225,6 +229,42 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                <button type="button" class="btn btn-danger" id="deleteFromDetailBtn" onclick="deleteFromDetail()">
+                    <i class="fas fa-trash"></i> 삭제
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 삭제 확인 모달 -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger">
+                    <i class="fas fa-exclamation-triangle"></i> 책 삭제 확인
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <i class="fas fa-warning"></i>
+                    <strong>주의:</strong> 이 작업은 되돌릴 수 없습니다!
+                </div>
+                <p>다음 책을 정말 삭제하시겠습니까?</p>
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title text-primary" id="deleteBookTitle"></h6>
+                        <p class="card-text text-muted" id="deleteBookInfo"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn" onclick="executeDelete()">
+                    <i class="fas fa-trash"></i> 삭제
+                </button>
             </div>
         </div>
     </div>
@@ -234,6 +274,8 @@
 {% block scripts %}
 <script>
 const books = {{ books | tojsonfilter | safe }};
+let bookToDelete = null;
+let currentBookIndex = null;
 
 // 검색 필터
 $('#searchFilter').on('input', function() {
@@ -338,6 +380,7 @@ function clearFilters() {
 
 function viewBookDetails(index) {
     const book = books[index];
+    currentBookIndex = index; // 상세보기에서 삭제할 때 사용
     
     const detailHtml = `
         <div class="row">
@@ -375,6 +418,64 @@ function viewBookDetails(index) {
     
     $('#bookDetailContent').html(detailHtml);
     $('#bookDetailModal').modal('show');
+}
+
+// 삭제 확인 모달 표시
+function confirmDeleteBook(bookId, bookTitle) {
+    // 전역에서 책 정보 찾기
+    const book = books.find(b => b.id === bookId);
+    
+    if (!book) {
+        alert('책 정보를 찾을 수 없습니다.');
+        return;
+    }
+    
+    bookToDelete = bookId;
+    
+    $('#deleteBookTitle').text(book.title);
+    $('#deleteBookInfo').html(`
+        <i class="fas fa-user"></i> ${book.authors}<br>
+        <i class="fas fa-building"></i> ${book.publisher}
+    `);
+    
+    $('#deleteConfirmModal').modal('show');
+}
+
+// 상세보기에서 삭제
+function deleteFromDetail() {
+    if (currentBookIndex !== null) {
+        const book = books[currentBookIndex];
+        $('#bookDetailModal').modal('hide');
+        confirmDeleteBook(book.id, book.title);
+    }
+}
+
+// 실제 삭제 실행
+function executeDelete() {
+    if (!bookToDelete) return;
+    
+    // 삭제 버튼 비활성화
+    $('#confirmDeleteBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> 삭제 중...');
+    
+    $.ajax({
+        url: `/delete_book/${bookToDelete}`,
+        method: 'DELETE',
+        success: function(response) {
+            if (response.success) {
+                $('#deleteConfirmModal').modal('hide');
+                alert(response.message);
+                location.reload(); // 페이지 새로고침
+            } else {
+                alert('삭제 실패: ' + response.error);
+                $('#confirmDeleteBtn').prop('disabled', false).html('<i class="fas fa-trash"></i> 삭제');
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON?.error || '서버 오류가 발생했습니다.';
+            alert('삭제 실패: ' + error);
+            $('#confirmDeleteBtn').prop('disabled', false).html('<i class="fas fa-trash"></i> 삭제');
+        }
+    });
 }
 
 // 초기 정렬
