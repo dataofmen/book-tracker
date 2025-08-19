@@ -15,6 +15,12 @@ from urllib.parse import quote
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
 
+# 파일 업로드 크기 제한 (5MB)
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
+
+# JSON 요청 크기 제한
+app.config['MAX_CONTENT_PATH'] = 5 * 1024 * 1024
+
 # 네이버 API 설정 (환경변수 또는 직접 설정)
 NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')  # 네이버 개발자센터에서 발급
 NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')  # 네이버 개발자센터에서 발급
@@ -102,7 +108,7 @@ class BookTracker:
                 'sort': 'sim'  # 정확도순
             }
             
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = requests.get(url, headers=headers, params=params, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
@@ -158,7 +164,7 @@ class BookTracker:
                 'sort': 'sim'
             }
             
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = requests.get(url, headers=headers, params=params, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
@@ -185,7 +191,7 @@ class BookTracker:
         try:
             # Google Books API 호출
             url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}"
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
@@ -345,8 +351,22 @@ class BookTracker:
                     })
                     continue
                 
-                # 책 정보 검색
-                books = self.search_book_info(title)
+                # 책 정보 검색 - 타임아웃과 재시도 로직 추가
+                books = None
+                max_retries = 2
+                
+                for retry in range(max_retries):
+                    try:
+                        books = self.search_book_info(title)
+                        if books:
+                            break
+                    except Exception as search_error:
+                        if retry == max_retries - 1:
+                            # 마지막 시도에서도 실패하면 오류로 기록
+                            raise search_error
+                        # 잠시 대기 후 재시도
+                        import time
+                        time.sleep(1)
                 
                 if books:
                     # 첫 번째 검색 결과 사용
@@ -365,9 +385,13 @@ class BookTracker:
                     })
                     
             except Exception as e:
+                # 상세한 오류 정보 기록
+                import traceback
+                error_msg = f"{str(e)} (상세: {traceback.format_exc().split(chr(10))[-3] if len(traceback.format_exc().split(chr(10))) > 2 else str(e)})"
+                
                 results['errors'].append({
                     'title': title,
-                    'reason': str(e)
+                    'reason': f'처리 중 오류: {str(e)}'
                 })
         
         return results
@@ -510,15 +534,40 @@ def bulk_add_csv():
         if file.filename == '':
             return jsonify({'error': 'CSV 파일을 선택해주세요'}), 400
         
-        if not file.filename.endswith('.csv'):
+        if not file.filename.lower().endswith('.csv'):
             return jsonify({'error': 'CSV 파일만 업로드 가능합니다'}), 400
         
-        # CSV 내용 읽기
-        csv_content = file.read().decode('utf-8')
+        # 파일 크기 체크 (5MB 제한)
+        file.seek(0, 2)  # 파일 끝으로 이동
+        file_size = file.tell()
+        file.seek(0)  # 파일 처음으로 되돌림
+        
+        if file_size > 5 * 1024 * 1024:  # 5MB
+            return jsonify({'error': 'CSV 파일 크기는 5MB 이하여야 합니다'}), 400
+        
+        # CSV 내용 읽기 - 여러 인코딩 시도
+        csv_content = None
+        raw_content = file.read()
+        
+        for encoding in ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'latin1']:
+            try:
+                csv_content = raw_content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if csv_content is None:
+            return jsonify({'error': 'CSV 파일 인코딩을 읽을 수 없습니다. UTF-8로 저장해주세요'}), 400
+        
+        # CSV 파싱
         titles = book_tracker.parse_csv_content(csv_content)
         
         if not titles:
             return jsonify({'error': 'CSV 파일에서 책 제목을 찾을 수 없습니다'}), 400
+        
+        # 제목 개수 제한 (한 번에 너무 많이 처리하지 않도록)
+        if len(titles) > 100:
+            return jsonify({'error': '한 번에 최대 100권까지만 처리할 수 있습니다'}), 400
         
         # 대량 추가 실행
         results = book_tracker.bulk_add_books(titles)
@@ -530,6 +579,11 @@ def bulk_add_csv():
         })
         
     except Exception as e:
+        # 더 자세한 오류 정보 제공
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"CSV 업로드 오류: {error_details}")  # 서버 로그용
+        
         return jsonify({
             'success': False,
             'error': f'CSV 처리 중 오류가 발생했습니다: {str(e)}'
@@ -539,16 +593,28 @@ def bulk_add_csv():
 def bulk_add_text():
     """텍스트 대량 추가"""
     try:
+        # JSON 데이터 파싱 오류 처리
+        if not request.is_json:
+            return jsonify({'error': '잘못된 요청 형식입니다'}), 400
+        
         text_content = request.json.get('text_content', '').strip()
         
         if not text_content:
             return jsonify({'error': '책 제목을 입력해주세요'}), 400
+        
+        # 텍스트 길이 제한 (너무 큰 데이터 방지)
+        if len(text_content) > 50000:  # 50KB
+            return jsonify({'error': '입력 텍스트가 너무 큽니다. 50KB 이하로 줄여주세요'}), 400
         
         # 텍스트 내용 파싱
         titles = book_tracker.parse_text_content(text_content)
         
         if not titles:
             return jsonify({'error': '유효한 책 제목을 찾을 수 없습니다'}), 400
+        
+        # 제목 개수 제한
+        if len(titles) > 100:
+            return jsonify({'error': '한 번에 최대 100권까지만 처리할 수 있습니다'}), 400
         
         # 대량 추가 실행
         results = book_tracker.bulk_add_books(titles)
@@ -560,6 +626,11 @@ def bulk_add_text():
         })
         
     except Exception as e:
+        # 더 자세한 오류 정보 제공
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"텍스트 대량 추가 오류: {error_details}")  # 서버 로그용
+        
         return jsonify({
             'success': False,
             'error': f'텍스트 처리 중 오류가 발생했습니다: {str(e)}'
