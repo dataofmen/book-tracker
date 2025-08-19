@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+
+{% block title %}Book Tracker - 홈{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="text-center mb-5">
+            <h1 class="display-4 text-primary">
+                <i class="fas fa-book-open"></i> Book Tracker
+            </h1>
+            <p class="lead text-muted">책 제목만 입력하면 서지 정보를 자동으로 가져와서 관리해보세요</p>
+            <div class="d-flex justify-content-center gap-2 mt-4">
+                <a href="{{ url_for('bulk_add') }}" class="btn btn-success btn-lg">
+                    <i class="fas fa-upload"></i> 대량 추가
+                </a>
+                <a href="{{ url_for('books') }}" class="btn btn-outline-primary btn-lg">
+                    <i class="fas fa-list"></i> 책 목록
+                </a>
+            </div>
+        </div>
+
+        <!-- 검색 섹션 -->
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="fas fa-search"></i> 책 검색 및 등록</h5>
+            </div>
+            <div class="card-body">
+                <form id="searchForm">
+                    <div class="input-group mb-3">
+                        <input type="text" class="form-control form-control-lg" 
+                               id="bookQuery" placeholder="책 제목을 입력하세요..." required>
+                        <button class="btn btn-primary btn-lg" type="submit">
+                            <i class="fas fa-search"></i> 검색
+                        </button>
+                    </div>
+                </form>
+
+                <!-- 중복 경고 -->
+                <div id="duplicateAlert" class="alert duplicate-warning d-none">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>주의!</strong> <span id="duplicateMessage"></span>
+                </div>
+
+                <!-- 로딩 -->
+                <div id="loadingSpinner" class="text-center d-none">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">검색 중...</span>
+                    </div>
+                    <p class="mt-2">책 정보를 검색하고 있습니다...</p>
+                </div>
+
+                <!-- 검색 정보 -->
+                <div id="searchInfo" class="alert alert-info d-none">
+                    <i class="fas fa-info-circle"></i>
+                    <span id="searchInfoText"></span>
+                </div>
+
+                <!-- 검색 결과 -->
+                <div id="searchResults" class="d-none">
+                    <h6 class="mb-3">검색 결과:</h6>
+                    <div id="booksList"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 최근 추가된 책들 -->
+        <div class="card shadow">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">
+                    <i class="fas fa-clock"></i> 최근 추가된 책들 
+                    <small class="float-end">총 {{ books|length }}권</small>
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if books %}
+                    <div class="row">
+                        {% for book in books[:6] %}
+                        <div class="col-md-6 mb-3">
+                            <div class="card book-card h-100">
+                                <div class="row g-0">
+                                    <div class="col-3">
+                                        {% if book.thumbnail_url %}
+                                            <img src="{{ book.thumbnail_url }}" class="book-thumbnail rounded-start h-100 w-100" alt="책 표지">
+                                        {% else %}
+                                            <div class="d-flex align-items-center justify-content-center h-100 bg-light rounded-start">
+                                                <i class="fas fa-book fa-2x text-muted"></i>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="col-9">
+                                        <div class="card-body p-3">
+                                            <h6 class="card-title text-primary">{{ book.title }}</h6>
+                                            <p class="card-text small text-muted mb-1">
+                                                <i class="fas fa-user"></i> {{ book.authors }}
+                                            </p>
+                                            <p class="card-text small text-muted mb-1">
+                                                <i class="fas fa-building"></i> {{ book.publisher }}
+                                            </p>
+                                            {% if book.price %}
+                                            <p class="card-text small text-success mb-0">
+                                                <i class="fas fa-won-sign"></i> {{ "{:,.0f}".format(book.price) }}원
+                                            </p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    
+                    {% if books|length > 6 %}
+                    <div class="text-center mt-3">
+                        <a href="{{ url_for('books') }}" class="btn btn-outline-primary">
+                            <i class="fas fa-list"></i> 전체 목록 보기
+                        </a>
+                    </div>
+                    {% endif %}
+                {% else %}
+                    <div class="text-center text-muted">
+                        <i class="fas fa-book-open fa-3x mb-3"></i>
+                        <p>아직 등록된 책이 없습니다. 첫 번째 책을 검색해보세요!</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 책 추가 모달 -->
+<div class="modal fade" id="addBookModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">책 정보 추가</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addBookForm">
+                    <div id="selectedBookInfo"></div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="bookPrice" class="form-label">구매 가격 (선택사항)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="bookPrice" placeholder="0">
+                                <span class="input-group-text">원</span>
+                            </div>
+                        </div>
+                        <div class="col-12 mb-3">
+                            <label for="bookNotes" class="form-label">메모 (선택사항)</label>
+                            <textarea class="form-control" id="bookNotes" rows="3" 
+                                    placeholder="구매 목적, 읽은 후기 등을 적어보세요..."></textarea>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-primary" id="confirmAddBook">
+                    <i class="fas fa-plus"></i> 책 추가
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedBook = null;
+
+$('#searchForm').on('submit', function(e) {
+    e.preventDefault();
+    searchBooks();
+});
+
+function searchBooks() {
+    const query = $('#bookQuery').val().trim();
+    if (!query) return;
+
+    $('#loadingSpinner').removeClass('d-none');
+    $('#searchResults').addClass('d-none');
+    $('#duplicateAlert').addClass('d-none');
+    $('#searchInfo').addClass('d-none');
+
+    $.ajax({
+        url: '/search',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({query: query}),
+        success: function(response) {
+            $('#loadingSpinner').addClass('d-none');
+            
+            // API 사용 정보 표시
+            if (response.search_info) {
+                $('#searchInfoText').text(response.search_info);
+                $('#searchInfo').removeClass('d-none');
+            }
+            
+            if (response.is_duplicate) {
+                $('#duplicateMessage').text(response.duplicate_message);
+                $('#duplicateAlert').removeClass('d-none');
+            }
+            
+            displaySearchResults(response.books);
+        },
+        error: function() {
+            $('#loadingSpinner').addClass('d-none');
+            alert('검색 중 오류가 발생했습니다. 다시 시도해주세요.');
+        }
+    });
+}
+
+function displaySearchResults(books) {
+    const $booksList = $('#booksList');
+    $booksList.empty();
+
+    if (books.length === 0) {
+        $booksList.html('<div class="alert alert-warning">검색 결과가 없습니다.</div>');
+    } else {
+        books.forEach(function(book, index) {
+            const bookHtml = `
+                <div class="card mb-3">
+                    <div class="row g-0">
+                        <div class="col-2">
+                            ${book.thumbnail_url ? 
+                                `<img src="${book.thumbnail_url}" class="search-result-thumbnail rounded-start h-100 w-100" alt="책 표지">` :
+                                '<div class="d-flex align-items-center justify-content-center h-100 bg-light rounded-start"><i class="fas fa-book fa-lg text-muted"></i></div>'
+                            }
+                        </div>
+                        <div class="col-8">
+                            <div class="card-body">
+                                <h6 class="card-title">${book.title}</h6>
+                                <p class="card-text small text-muted mb-1">
+                                    <i class="fas fa-user"></i> ${book.authors}
+                                </p>
+                                <p class="card-text small text-muted mb-1">
+                                    <i class="fas fa-building"></i> ${book.publisher}
+                                </p>
+                                <p class="card-text small text-muted">
+                                    <i class="fas fa-calendar"></i> ${book.published_date}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="col-2 d-flex align-items-center">
+                            <button class="btn btn-primary btn-sm w-100" onclick="selectBook(${index})">
+                                <i class="fas fa-plus"></i> 선택
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            $booksList.append(bookHtml);
+        });
+    }
+    
+    $('#searchResults').removeClass('d-none');
+    window.searchedBooks = books;
+}
+
+function selectBook(index) {
+    selectedBook = window.searchedBooks[index];
+    
+    const bookInfoHtml = `
+        <div class="row mb-4">
+            <div class="col-3">
+                ${selectedBook.thumbnail_url ? 
+                    `<img src="${selectedBook.thumbnail_url}" class="book-thumbnail rounded w-100" alt="책 표지">` :
+                    '<div class="d-flex align-items-center justify-content-center bg-light rounded" style="height: 120px;"><i class="fas fa-book fa-2x text-muted"></i></div>'
+                }
+            </div>
+            <div class="col-9">
+                <h5>${selectedBook.title}</h5>
+                <p class="text-muted mb-1"><i class="fas fa-user"></i> ${selectedBook.authors}</p>
+                <p class="text-muted mb-1"><i class="fas fa-building"></i> ${selectedBook.publisher}</p>
+                <p class="text-muted mb-1"><i class="fas fa-calendar"></i> ${selectedBook.published_date}</p>
+                ${selectedBook.isbn ? `<p class="text-muted mb-0"><i class="fas fa-barcode"></i> ${selectedBook.isbn}</p>` : ''}
+            </div>
+        </div>
+    `;
+    
+    $('#selectedBookInfo').html(bookInfoHtml);
+    $('#addBookModal').modal('show');
+}
+
+$('#confirmAddBook').on('click', function() {
+    if (!selectedBook) return;
+    
+    const price = $('#bookPrice').val();
+    const notes = $('#bookNotes').val();
+    
+    $.ajax({
+        url: '/add_book',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            book_info: selectedBook,
+            price: price || null,
+            notes: notes
+        }),
+        success: function(response) {
+            if (response.success) {
+                $('#addBookModal').modal('hide');
+                alert('책이 성공적으로 추가되었습니다!');
+                location.reload();
+            } else {
+                alert(response.error || '책 추가 중 오류가 발생했습니다.');
+            }
+        },
+        error: function() {
+            alert('책 추가 중 오류가 발생했습니다. 다시 시도해주세요.');
+        }
+    });
+});
+
+// 모달이 닫힐 때 폼 초기화
+$('#addBookModal').on('hidden.bs.modal', function() {
+    $('#bookPrice').val('');
+    $('#bookNotes').val('');
+    selectedBook = null;
+});
+</script>
+{% endblock %}

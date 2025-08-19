@@ -1,0 +1,35 @@
+# 환경 설정
+.env
+.env.local
+.env.production
+.env.development
+
+# 데이터베이스
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 로그 파일
+*.log
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

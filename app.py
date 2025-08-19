@@ -1,0 +1,570 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sqlite3
+import requests
+import json
+import re
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, redirect, url_for
+import os
+import csv
+import io
+from urllib.parse import quote
+
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-here'
+
+# 네이버 API 설정 (환경변수 또는 직접 설정)
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')  # 네이버 개발자센터에서 발급
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')  # 네이버 개발자센터에서 발급
+
+class BookTracker:
+    def __init__(self, db_path='books.db'):
+        self.db_path = db_path
+        self.init_db()
+    
+    def init_db(self):
+        """데이터베이스 초기화"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS books (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                authors TEXT,
+                publisher TEXT,
+                published_date TEXT,
+                isbn TEXT,
+                description TEXT,
+                thumbnail_url TEXT,
+                purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                price REAL,
+                notes TEXT,
+                kyobo_link TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 기존 테이블에 kyobo_link 컬럼 추가 (이미 있으면 무시됨)
+        try:
+            cursor.execute('ALTER TABLE books ADD COLUMN kyobo_link TEXT')
+        except sqlite3.OperationalError:
+            # 컬럼이 이미 존재하면 무시
+            pass
+        
+        conn.commit()
+        conn.close()
+    
+    def detect_language(self, text):
+        """언어 감지: 한국어면 True, 영어면 False 반환"""
+        # 한글 문자가 포함되어 있으면 한국어로 판단
+        korean_pattern = re.compile(r'[ㄱ-ㅎㅏ-ㅣ가-힣]')
+        return bool(korean_pattern.search(text))
+    
+    def search_book_info(self, query):
+        """언어별 API 선택하여 도서 정보 검색"""
+        is_korean = self.detect_language(query)
+        
+        if is_korean:
+            # 한국어 제목: 네이버 Books API 사용
+            books = self.search_naver_books(query)
+            if not books:
+                # 네이버에서 결과가 없으면 Google Books API도 시도
+                books = self.search_google_books(query)
+        else:
+            # 영어 제목: Google Books API 사용
+            books = self.search_google_books(query)
+            if not books:
+                # Google에서 결과가 없으면 네이버 API도 시도
+                books = self.search_naver_books(query)
+        
+        return books
+    
+    def search_naver_books(self, query):
+        """네이버 Books API로 도서 정보 검색"""
+        if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+            print("네이버 API 키가 설정되지 않았습니다. Google Books API를 사용합니다.")
+            return self.search_google_books(query)
+        
+        try:
+            # 네이버 검색 API 호출
+            url = "https://openapi.naver.com/v1/search/book.json"
+            headers = {
+                'X-Naver-Client-Id': NAVER_CLIENT_ID,
+                'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
+            }
+            params = {
+                'query': query,
+                'display': 5,  # 최대 5개 결과
+                'start': 1,
+                'sort': 'sim'  # 정확도순
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                books = []
+                
+                for item in data.get('items', []):
+                    book_info = {
+                        'title': self._clean_html_tags(item.get('title', 'Unknown')),
+                        'authors': self._clean_html_tags(item.get('author', 'Unknown')),
+                        'publisher': self._clean_html_tags(item.get('publisher', 'Unknown')),
+                        'published_date': item.get('pubdate', 'Unknown'),
+                        'description': self._clean_html_tags(item.get('description', '')),
+                        'thumbnail_url': item.get('image', ''),
+                        'isbn': item.get('isbn', ''),
+                        'api_source': 'naver'
+                    }
+                    
+                    # 네이버 쇼핑에서 교보문고 링크 찾기
+                    kyobo_link = self._find_kyobo_link(book_info['title'], book_info['isbn'])
+                    if kyobo_link:
+                        book_info['kyobo_link'] = kyobo_link
+                    
+                    books.append(book_info)
+                
+                return books
+            else:
+                print(f"네이버 API 오류: {response.status_code}")
+                
+        except Exception as e:
+            print(f"네이버 API 호출 오류: {e}")
+        
+        return []
+    
+    def _find_kyobo_link(self, title, isbn):
+        """네이버 쇼핑 API를 통해 교보문고 링크 찾기"""
+        if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+            return None
+        
+        try:
+            # 네이버 쇼핑 API 호출
+            url = "https://openapi.naver.com/v1/search/shop.json"
+            headers = {
+                'X-Naver-Client-Id': NAVER_CLIENT_ID,
+                'X-Naver-Client-Secret': NAVER_CLIENT_SECRET
+            }
+            
+            # ISBN이 있으면 ISBN으로, 없으면 책 제목으로 검색
+            search_query = isbn if isbn else title
+            params = {
+                'query': f"{search_query} 책",
+                'display': 10,
+                'start': 1,
+                'sort': 'sim'
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                for item in data.get('items', []):
+                    mall_name = item.get('mallName', '').lower()
+                    
+                    # 교보문고 관련 쇼핑몰 이름 확인
+                    if '교보문고' in mall_name or 'kyobobook' in mall_name:
+                        return item.get('link', '')
+                    
+                    # 네이버 쇼핑에서 교보문고로 연결되는 링크 확인
+                    link = item.get('link', '')
+                    if 'kyobobook' in link.lower():
+                        return link
+                
+        except Exception as e:
+            print(f"교보문고 링크 검색 오류: {e}")
+        
+        return None
+    
+    def search_google_books(self, query):
+        """Google Books API로 도서 정보 검색"""
+        try:
+            # Google Books API 호출
+            url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('totalItems', 0) > 0:
+                    books = []
+                    for item in data['items'][:5]:  # 상위 5개 결과만
+                        volume_info = item.get('volumeInfo', {})
+                        
+                        book_info = {
+                            'title': volume_info.get('title', 'Unknown'),
+                            'authors': ', '.join(volume_info.get('authors', ['Unknown'])),
+                            'publisher': volume_info.get('publisher', 'Unknown'),
+                            'published_date': volume_info.get('publishedDate', 'Unknown'),
+                            'description': volume_info.get('description', ''),
+                            'thumbnail_url': volume_info.get('imageLinks', {}).get('thumbnail', ''),
+                            'isbn': self._extract_isbn(volume_info.get('industryIdentifiers', [])),
+                            'api_source': 'google'
+                        }
+                        books.append(book_info)
+                    
+                    return books
+                
+        except Exception as e:
+            print(f"Google Books API 호출 오류: {e}")
+        
+        return []
+    
+    def _clean_html_tags(self, text):
+        """HTML 태그 제거"""
+        if not text:
+            return ''
+        # HTML 태그 제거
+        clean_text = re.sub(r'<[^>]+>', '', str(text))
+        return clean_text.strip()
+    
+    def _extract_isbn(self, identifiers):
+        """ISBN 추출"""
+        for identifier in identifiers:
+            if identifier.get('type') in ['ISBN_13', 'ISBN_10']:
+                return identifier.get('identifier', '')
+        return ''
+    
+    def add_book(self, book_info, price=None, notes=''):
+        """책 정보 데이터베이스에 추가"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO books (title, authors, publisher, published_date, isbn, 
+                             description, thumbnail_url, price, notes, kyobo_link)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            book_info['title'],
+            book_info['authors'],
+            book_info['publisher'],
+            book_info['published_date'],
+            book_info['isbn'],
+            book_info['description'],
+            book_info['thumbnail_url'],
+            price,
+            notes,
+            book_info.get('kyobo_link', '')
+        ))
+        
+        conn.commit()
+        book_id = cursor.lastrowid
+        conn.close()
+        
+        return book_id
+    
+    def get_all_books(self):
+        """모든 책 목록 조회"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, title, authors, publisher, published_date, isbn, 
+                   description, thumbnail_url, purchase_date, price, notes, 
+                   kyobo_link, created_at 
+            FROM books ORDER BY purchase_date DESC
+        ''')
+        
+        books = []
+        for row in cursor.fetchall():
+            book = {
+                'id': row[0],
+                'title': row[1],
+                'authors': row[2],
+                'publisher': row[3],
+                'published_date': row[4],
+                'isbn': row[5],
+                'description': row[6],
+                'thumbnail_url': row[7],
+                'purchase_date': row[8],
+                'price': row[9],
+                'notes': row[10],
+                'kyobo_link': row[11] if row[11] else '',
+                'created_at': row[12]
+            }
+            books.append(book)
+        
+        conn.close()
+        return books
+    
+    def check_duplicate(self, title, isbn=None):
+        """중복 도서 검사"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        if isbn:
+            cursor.execute('SELECT * FROM books WHERE isbn = ? AND isbn != ""', (isbn,))
+            result = cursor.fetchone()
+            if result:
+                conn.close()
+                return True
+        
+        # 제목으로 유사도 검사 (간단한 문자열 매칭)
+        cursor.execute('SELECT title FROM books')
+        existing_titles = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        # 간단한 중복 검사 (대소문자 무시, 공백 제거)
+        clean_title = title.lower().replace(' ', '').replace('　', '')
+        for existing in existing_titles:
+            clean_existing = existing.lower().replace(' ', '').replace('　', '')
+            if clean_title in clean_existing or clean_existing in clean_title:
+                return True
+        
+        return False
+    
+    def bulk_add_books(self, book_titles, progress_callback=None):
+        """대량 책 추가"""
+        results = {
+            'success': [],
+            'duplicates': [],
+            'errors': [],
+            'total': len(book_titles)
+        }
+        
+        for i, title in enumerate(book_titles):
+            title = title.strip()
+            if not title:
+                continue
+                
+            try:
+                # 진행률 콜백 호출
+                if progress_callback:
+                    progress_callback(i + 1, len(book_titles), title)
+                
+                # 중복 검사
+                if self.check_duplicate(title):
+                    results['duplicates'].append({
+                        'title': title,
+                        'reason': '이미 등록된 책입니다'
+                    })
+                    continue
+                
+                # 책 정보 검색
+                books = self.search_book_info(title)
+                
+                if books:
+                    # 첫 번째 검색 결과 사용
+                    book_info = books[0]
+                    book_id = self.add_book(book_info)
+                    
+                    results['success'].append({
+                        'title': book_info['title'],
+                        'authors': book_info['authors'],
+                        'id': book_id
+                    })
+                else:
+                    results['errors'].append({
+                        'title': title,
+                        'reason': '검색 결과가 없습니다'
+                    })
+                    
+            except Exception as e:
+                results['errors'].append({
+                    'title': title,
+                    'reason': str(e)
+                })
+        
+        return results
+    
+    def parse_csv_content(self, csv_content):
+        """CSV 내용 파싱"""
+        titles = []
+        csv_reader = csv.reader(io.StringIO(csv_content))
+        
+        for row in csv_reader:
+            if row:  # 빈 행 건너뛰기
+                # 첫 번째 컬럼을 책 제목으로 사용
+                title = row[0].strip()
+                if title and title != '제목' and title != 'title':  # 헤더 제외
+                    titles.append(title)
+        
+        return titles
+    
+    def parse_text_content(self, text_content):
+        """텍스트 내용 파싱 (줄바꿈으로 구분)"""
+        titles = []
+        lines = text_content.split('\n')
+        
+        for line in lines:
+            title = line.strip()
+            if title:
+                titles.append(title)
+        
+        return titles
+
+# BookTracker 인스턴스 생성
+book_tracker = BookTracker()
+
+# Jinja2 커스텀 필터 추가
+@app.template_filter('selectattr')
+def selectattr_filter(items, attribute):
+    """selectattr 필터 구현"""
+    return [item for item in items if item.get(attribute) is not None]
+
+@app.template_filter('map')
+def map_filter(items, attribute):
+    """map 필터 구현"""
+    return [item.get(attribute) for item in items if item.get(attribute) is not None]
+
+@app.template_filter('sum')
+def sum_filter(items):
+    """sum 필터 구현"""
+    return sum(items)
+
+@app.template_filter('tojsonfilter')
+def to_json_filter(obj):
+    """JSON 직렬화 필터"""
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+@app.template_filter('urlencode')
+def urlencode_filter(text):
+    """URL 인코딩 필터"""
+    return quote(str(text), safe='')
+
+@app.route('/')
+def index():
+    """메인 페이지"""
+    books = book_tracker.get_all_books()
+    return render_template('index.html', books=books)
+
+@app.route('/search', methods=['POST'])
+def search():
+    """도서 검색"""
+    query = request.json.get('query', '').strip()
+    
+    if not query:
+        return jsonify({'error': '검색어를 입력하세요'}), 400
+    
+    # 언어 감지
+    is_korean = book_tracker.detect_language(query)
+    api_used = 'naver' if is_korean else 'google'
+    
+    # 중복 검사
+    is_duplicate = book_tracker.check_duplicate(query)
+    
+    # 도서 정보 검색
+    books = book_tracker.search_book_info(query)
+    
+    return jsonify({
+        'books': books,
+        'is_duplicate': is_duplicate,
+        'duplicate_message': '이미 구매한 책일 수 있습니다!' if is_duplicate else '',
+        'query_language': 'korean' if is_korean else 'english',
+        'primary_api': api_used,
+        'search_info': f"{'한국어' if is_korean else '영어'} 검색어 감지 → {'네이버' if api_used == 'naver' else 'Google'} Books API 사용"
+    })
+
+@app.route('/add_book', methods=['POST'])
+def add_book():
+    """책 추가"""
+    try:
+        book_info = request.json.get('book_info', {})
+        price = request.json.get('price')
+        notes = request.json.get('notes', '')
+        
+        if price:
+            try:
+                price = float(price)
+            except ValueError:
+                price = None
+        
+        book_id = book_tracker.add_book(book_info, price, notes)
+        
+        return jsonify({
+            'success': True,
+            'message': '책이 성공적으로 추가되었습니다!',
+            'book_id': book_id
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'책 추가 중 오류가 발생했습니다: {str(e)}'
+        }), 500
+
+@app.route('/books')
+def books():
+    """책 목록 페이지"""
+    books = book_tracker.get_all_books()
+    return render_template('books.html', books=books)
+
+@app.route('/bulk_add')
+def bulk_add():
+    """대량 추가 페이지"""
+    return render_template('bulk_add.html')
+
+@app.route('/bulk_add_csv', methods=['POST'])
+def bulk_add_csv():
+    """CSV 파일 대량 추가"""
+    try:
+        if 'csv_file' not in request.files:
+            return jsonify({'error': 'CSV 파일을 업로드해주세요'}), 400
+        
+        file = request.files['csv_file']
+        if file.filename == '':
+            return jsonify({'error': 'CSV 파일을 선택해주세요'}), 400
+        
+        if not file.filename.endswith('.csv'):
+            return jsonify({'error': 'CSV 파일만 업로드 가능합니다'}), 400
+        
+        # CSV 내용 읽기
+        csv_content = file.read().decode('utf-8')
+        titles = book_tracker.parse_csv_content(csv_content)
+        
+        if not titles:
+            return jsonify({'error': 'CSV 파일에서 책 제목을 찾을 수 없습니다'}), 400
+        
+        # 대량 추가 실행
+        results = book_tracker.bulk_add_books(titles)
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'message': f'총 {results["total"]}권 처리 완료'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'CSV 처리 중 오류가 발생했습니다: {str(e)}'
+        }), 500
+
+@app.route('/bulk_add_text', methods=['POST'])
+def bulk_add_text():
+    """텍스트 대량 추가"""
+    try:
+        text_content = request.json.get('text_content', '').strip()
+        
+        if not text_content:
+            return jsonify({'error': '책 제목을 입력해주세요'}), 400
+        
+        # 텍스트 내용 파싱
+        titles = book_tracker.parse_text_content(text_content)
+        
+        if not titles:
+            return jsonify({'error': '유효한 책 제목을 찾을 수 없습니다'}), 400
+        
+        # 대량 추가 실행
+        results = book_tracker.bulk_add_books(titles)
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'message': f'총 {results["total"]}권 처리 완료'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'텍스트 처리 중 오류가 발생했습니다: {str(e)}'
+        }), 500
+
+if __name__ == '__main__':
+    # 로컬 개발용
+    app.run(debug=True, host='127.0.0.1', port=8082)

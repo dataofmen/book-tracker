@@ -1,0 +1,385 @@
+{% extends "base.html" %}
+
+{% block title %}Book Tracker - 책 목록{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="fas fa-list"></i> 내 책 목록</h2>
+    <div class="d-flex align-items-center">
+        <span class="badge bg-primary fs-6 me-3">총 {{ books|length }}권</span>
+        <a href="{{ url_for('index') }}" class="btn btn-success">
+            <i class="fas fa-plus"></i> 새 책 추가
+        </a>
+    </div>
+</div>
+
+{% if books %}
+    <!-- 통계 카드 -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white">
+                <div class="card-body text-center">
+                    <i class="fas fa-book fa-2x mb-2"></i>
+                    <h4>{{ books|length }}</h4>
+                    <p class="mb-0">총 보유 도서</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body text-center">
+                    <i class="fas fa-won-sign fa-2x mb-2"></i>
+                    <h4>
+                        {% set total_price = 0 %}
+                        {% for book in books %}
+                            {% if book.price %}
+                                {% set total_price = total_price + book.price %}
+                            {% endif %}
+                        {% endfor %}
+                        {% if total_price > 0 %}
+                            {{ "{:,.0f}".format(total_price) }}원
+                        {% else %}
+                            -
+                        {% endif %}
+                    </h4>
+                    <p class="mb-0">총 구매 금액</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white">
+                <div class="card-body text-center">
+                    <i class="fas fa-calendar fa-2x mb-2"></i>
+                    <h4>{{ books|length if books|length < 10 else (books|length|string)[:-1] + '0+' }}</h4>
+                    <p class="mb-0">이번 달 추가</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body text-center">
+                    <i class="fas fa-star fa-2x mb-2"></i>
+                    <h4>
+                        {% set notes_count = 0 %}
+                        {% for book in books %}
+                            {% if book.notes %}
+                                {% set notes_count = notes_count + 1 %}
+                            {% endif %}
+                        {% endfor %}
+                        {{ notes_count }}
+                    </h4>
+                    <p class="mb-0">메모 있는 책</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 필터 및 정렬 -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <div class="row align-items-center">
+                <div class="col-md-4">
+                    <input type="text" class="form-control" id="searchFilter" placeholder="책 제목이나 저자로 검색...">
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select" id="sortBy">
+                        <option value="date_desc">최근 추가순</option>
+                        <option value="date_asc">오래된 순</option>
+                        <option value="title_asc">제목 ㄱ-ㅎ</option>
+                        <option value="title_desc">제목 ㅎ-ㄱ</option>
+                        <option value="author_asc">저자명 ㄱ-ㅎ</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select" id="filterBy">
+                        <option value="all">전체 보기</option>
+                        <option value="with_price">가격 정보 있음</option>
+                        <option value="with_notes">메모 있음</option>
+                        <option value="recent">최근 한 달</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">
+                        <i class="fas fa-times"></i> 초기화
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 책 목록 -->
+    <div class="row" id="booksList">
+        {% for book in books %}
+        <div class="col-lg-4 col-md-6 mb-4 book-item" 
+             data-title="{{ book.title|lower }}" 
+             data-author="{{ book.authors|lower }}"
+             data-date="{{ book.purchase_date }}"
+             data-has-price="{{ 'true' if book.price else 'false' }}"
+             data-has-notes="{{ 'true' if book.notes else 'false' }}">
+            <div class="card book-card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-4">
+                            {% if book.thumbnail_url %}
+                                <img src="{{ book.thumbnail_url }}" class="book-thumbnail rounded w-100" alt="책 표지">
+                            {% else %}
+                                <div class="d-flex align-items-center justify-content-center bg-light rounded" style="height: 120px;">
+                                    <i class="fas fa-book fa-2x text-muted"></i>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div class="col-8">
+                            <h6 class="card-title text-primary mb-2">{{ book.title }}</h6>
+                            <p class="card-text small text-muted mb-1">
+                                <i class="fas fa-user"></i> {{ book.authors }}
+                            </p>
+                            <p class="card-text small text-muted mb-1">
+                                <i class="fas fa-building"></i> {{ book.publisher }}
+                            </p>
+                            {% if book.published_date != 'Unknown' %}
+                            <p class="card-text small text-muted mb-1">
+                                <i class="fas fa-calendar"></i> {{ book.published_date }}
+                            </p>
+                            {% endif %}
+                            {% if book.isbn %}
+                            <p class="card-text small text-muted mb-2">
+                                <i class="fas fa-barcode"></i> {{ book.isbn }}
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <hr>
+                    
+                    <div class="row">
+                        <div class="col-6">
+                            <small class="text-muted">
+                                <i class="fas fa-clock"></i> 
+                                {{ book.purchase_date.split()[0] if book.purchase_date else '날짜 없음' }}
+                            </small>
+                        </div>
+                        <div class="col-6 text-end">
+                            {% if book.price %}
+                            <small class="text-success">
+                                <i class="fas fa-won-sign"></i> {{ "{:,.0f}".format(book.price) }}원
+                            </small>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    {% if book.notes %}
+                    <div class="mt-2">
+                        <small class="text-info">
+                            <i class="fas fa-sticky-note"></i> 
+                            {{ book.notes[:50] + ('...' if book.notes|length > 50 else '') }}
+                        </small>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div class="card-footer bg-transparent">
+                    <div class="text-center">
+                        <button class="btn btn-outline-primary btn-sm" 
+                                onclick="viewBookDetails({{ loop.index0 }})">
+                            <i class="fas fa-eye"></i> 상세보기
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 결과 없음 메시지 -->
+    <div id="noResults" class="text-center text-muted d-none">
+        <i class="fas fa-search fa-3x mb-3"></i>
+        <h4>검색 결과가 없습니다</h4>
+        <p>다른 검색어나 필터를 사용해보세요.</p>
+    </div>
+
+{% else %}
+    <div class="text-center">
+        <div class="card">
+            <div class="card-body py-5">
+                <i class="fas fa-book-open fa-4x text-muted mb-4"></i>
+                <h4 class="text-muted">아직 등록된 책이 없습니다</h4>
+                <p class="text-muted mb-4">첫 번째 책을 추가해보세요!</p>
+                <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg">
+                    <i class="fas fa-plus"></i> 첫 책 추가하기
+                </a>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
+<!-- 책 상세보기 모달 -->
+<div class="modal fade" id="bookDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">책 상세 정보</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="bookDetailContent">
+                <!-- 상세 정보가 여기에 로드됩니다 -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const books = {{ books | tojsonfilter | safe }};
+
+// 검색 필터
+$('#searchFilter').on('input', function() {
+    filterBooks();
+});
+
+// 정렬 옵션
+$('#sortBy').on('change', function() {
+    sortBooks();
+});
+
+// 필터 옵션
+$('#filterBy').on('change', function() {
+    filterBooks();
+});
+
+function filterBooks() {
+    const searchTerm = $('#searchFilter').val().toLowerCase();
+    const filterBy = $('#filterBy').val();
+    let visibleCount = 0;
+
+    $('.book-item').each(function() {
+        const $item = $(this);
+        const title = $item.data('title');
+        const author = $item.data('author');
+        const hasPrice = $item.data('has-price') === 'true';
+        const hasNotes = $item.data('has-notes') === 'true';
+        const date = new Date($item.data('date'));
+        const oneMonthAgo = new Date();
+        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+        // 텍스트 검색
+        const matchesSearch = searchTerm === '' || 
+                             title.includes(searchTerm) || 
+                             author.includes(searchTerm);
+
+        // 필터 조건
+        let matchesFilter = true;
+        switch(filterBy) {
+            case 'with_price':
+                matchesFilter = hasPrice;
+                break;
+            case 'with_notes':
+                matchesFilter = hasNotes;
+                break;
+            case 'recent':
+                matchesFilter = date >= oneMonthAgo;
+                break;
+        }
+
+        if (matchesSearch && matchesFilter) {
+            $item.show();
+            visibleCount++;
+        } else {
+            $item.hide();
+        }
+    });
+
+    // 결과 없음 메시지
+    if (visibleCount === 0) {
+        $('#noResults').removeClass('d-none');
+    } else {
+        $('#noResults').addClass('d-none');
+    }
+}
+
+function sortBooks() {
+    const sortBy = $('#sortBy').val();
+    const $container = $('#booksList');
+    const $items = $('.book-item').detach();
+
+    $items.sort(function(a, b) {
+        const $a = $(a);
+        const $b = $(b);
+
+        switch(sortBy) {
+            case 'date_desc':
+                return new Date($b.data('date')) - new Date($a.data('date'));
+            case 'date_asc':
+                return new Date($a.data('date')) - new Date($b.data('date'));
+            case 'title_asc':
+                return $a.data('title').localeCompare($b.data('title'));
+            case 'title_desc':
+                return $b.data('title').localeCompare($a.data('title'));
+            case 'author_asc':
+                return $a.data('author').localeCompare($b.data('author'));
+            default:
+                return 0;
+        }
+    });
+
+    $container.append($items);
+}
+
+function clearFilters() {
+    $('#searchFilter').val('');
+    $('#sortBy').val('date_desc');
+    $('#filterBy').val('all');
+    sortBooks();
+    filterBooks();
+}
+
+function viewBookDetails(index) {
+    const book = books[index];
+    
+    const detailHtml = `
+        <div class="row">
+            <div class="col-md-4 text-center">
+                ${book.thumbnail_url ? 
+                    `<img src="${book.thumbnail_url}" class="img-fluid rounded mb-3" style="max-height: 200px;" alt="책 표지">` :
+                    '<div class="d-flex align-items-center justify-content-center bg-light rounded mb-3" style="height: 200px;"><i class="fas fa-book fa-3x text-muted"></i></div>'
+                }
+            </div>
+            <div class="col-md-8">
+                <h4 class="text-primary mb-3">${book.title}</h4>
+                <div class="mb-2"><strong>저자:</strong> ${book.authors}</div>
+                <div class="mb-2"><strong>출판사:</strong> ${book.publisher}</div>
+                <div class="mb-2"><strong>출간일:</strong> ${book.published_date}</div>
+                ${book.isbn ? `<div class="mb-2"><strong>ISBN:</strong> ${book.isbn}</div>` : ''}
+                <div class="mb-2"><strong>등록일:</strong> ${book.purchase_date ? book.purchase_date.split('T')[0] : '정보 없음'}</div>
+                ${book.price ? `<div class="mb-2"><strong>구매 가격:</strong> <span class="text-success">${book.price.toLocaleString()}원</span></div>` : ''}
+            </div>
+        </div>
+        
+        ${book.description ? `
+            <hr>
+            <h6>책 소개</h6>
+            <p class="text-muted">${book.description}</p>
+        ` : ''}
+        
+        ${book.notes ? `
+            <hr>
+            <h6>내 메모</h6>
+            <div class="alert alert-info">
+                <i class="fas fa-sticky-note"></i> ${book.notes}
+            </div>
+        ` : ''}
+    `;
+    
+    $('#bookDetailContent').html(detailHtml);
+    $('#bookDetailModal').modal('show');
+}
+
+// 초기 정렬
+$(document).ready(function() {
+    sortBooks();
+});
+</script>
+{% endblock %}
