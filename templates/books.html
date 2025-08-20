@@ -9,8 +9,8 @@
         <span class="badge bg-primary fs-6 me-3">총 {{ books|length }}권</span>
         {% set unknown_books = books | selectattr('authors', 'equalto', 'Unknown') | list %}
         {% if unknown_books|length > 0 %}
-        <button class="btn btn-warning me-2" onclick="smartUpdateDetails()">
-            <i class="fas fa-sync"></i> 5권씩 업데이트 ({{ unknown_books|length }}권 남음)
+        <button class="btn btn-success me-2" onclick="startBackgroundUpdate()">
+            <i class="fas fa-magic"></i> 전체 업데이트 ({{ unknown_books|length }}권)
         </button>
         {% endif %}
         <a href="{{ url_for('index') }}" class="btn btn-success">
@@ -281,6 +281,96 @@
         </div>
     </div>
 </div>
+
+<!-- 백그라운드 업데이트 진행률 모달 -->
+<div class="modal fade" id="backgroundUpdateModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-magic text-success"></i> 백그라운드 업데이트 진행 중
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" id="closeUpdateModal" style="display: none;"></button>
+            </div>
+            <div class="modal-body">
+                <!-- 진행률 표시 -->
+                <div class="mb-4">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span id="progressText">준비 중...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" 
+                             role="progressbar" id="backgroundProgressBar" style="width: 0%">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 통계 정보 -->
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <div class="card bg-primary text-white text-center">
+                            <div class="card-body py-2">
+                                <h6 class="mb-0" id="totalBooksCount">0</h6>
+                                <small>총 책 수</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-info text-white text-center">
+                            <div class="card-body py-2">
+                                <h6 class="mb-0" id="processedBooksCount">0</h6>
+                                <small>처리 완료</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-success text-white text-center">
+                            <div class="card-body py-2">
+                                <h6 class="mb-0" id="successBooksCount">0</h6>
+                                <small>성공</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="card bg-danger text-white text-center">
+                            <div class="card-body py-2">
+                                <h6 class="mb-0" id="errorBooksCount">0</h6>
+                                <small>실패</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 최근 처리된 책들 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0"><i class="fas fa-history"></i> 최근 처리된 책들</h6>
+                    </div>
+                    <div class="card-body" style="max-height: 200px; overflow-y: auto;">
+                        <div id="recentLogs">
+                            <p class="text-muted text-center">작업이 시작되면 여기에 진행 상황이 표시됩니다.</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 작업 완료 메시지 -->
+                <div id="completionMessage" class="alert alert-success mt-3" style="display: none;">
+                    <h6><i class="fas fa-check-circle"></i> 업데이트 완료!</h6>
+                    <p class="mb-0" id="completionText"></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="closeButton" style="display: none;">
+                    닫기
+                </button>
+                <a href="{{ url_for('books') }}" class="btn btn-primary" id="refreshButton" style="display: none;">
+                    <i class="fas fa-refresh"></i> 페이지 새로고침
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -528,7 +618,7 @@ function updateBookDetails(bookId, bookTitle) {
     });
 }
 
-// 10권씩 업데이트
+// 기존 5권씩 업데이트 함수 (백그라운드 업데이트로 대체됨)
 function smartUpdateDetails() {
     if (!confirm('Unknown 상태인 책 5권의 상세정보를 업데이트하시겠습니까?')) {
         return;
@@ -586,6 +676,180 @@ function smartUpdateDetails() {
         }
     });
 }
+
+// ============== 백그라운드 업데이트 함수들 ==============
+
+let currentJobId = null;
+let pollingInterval = null;
+
+// 백그라운드 업데이트 시작
+function startBackgroundUpdate() {
+    if (!confirm('모든 Unknown 책의 상세정보를 백그라운드에서 업데이트하시겠습니까?\\n\\n이 작업은 시간이 오래 걸릴 수 있지만, 중간에 취소할 수 있습니다.')) {
+        return;
+    }
+    
+    // 모달 표시
+    $('#backgroundUpdateModal').modal('show');
+    resetProgressModal();
+    
+    // 업데이트 시작 요청
+    $.ajax({
+        url: '/start_background_update',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({}),
+        success: function(response) {
+            if (response.success) {
+                currentJobId = response.job_id;
+                $('#progressText').text('백그라운드 업데이트가 시작되었습니다...');
+                
+                // 진행 상황 폴링 시작
+                startPolling();
+            } else {
+                alert('업데이트 시작 실패: ' + response.message);
+                $('#backgroundUpdateModal').modal('hide');
+            }
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON?.error || '서버 오류가 발생했습니다.';
+            alert('업데이트 시작 실패: ' + error);
+            $('#backgroundUpdateModal').modal('hide');
+        }
+    });
+}
+
+// 진행 상황 폴링 시작
+function startPolling() {
+    if (!currentJobId) return;
+    
+    pollingInterval = setInterval(function() {
+        checkUpdateStatus();
+    }, 2000); // 2초마다 확인
+    
+    // 즉시 한번 확인
+    checkUpdateStatus();
+}
+
+// 업데이트 상태 확인
+function checkUpdateStatus() {
+    if (!currentJobId) return;
+    
+    $.ajax({
+        url: `/update_status/${currentJobId}`,
+        method: 'GET',
+        success: function(response) {
+            if (response.success) {
+                updateProgressModal(response.status);
+                
+                // 완료 또는 실패시 폴링 중단
+                if (response.status.status === 'completed' || response.status.status === 'failed') {
+                    clearInterval(pollingInterval);
+                    showCompletionMessage(response.status);
+                }
+            }
+        },
+        error: function(xhr) {
+            console.error('상태 확인 실패:', xhr);
+            // 에러가 발생해도 계속 폴링 (일시적 오류일 수 있음)
+        }
+    });
+}
+
+// 진행률 모달 업데이트
+function updateProgressModal(status) {
+    const { total_books, processed_books, success_count, error_count, progress, recent_logs } = status;
+    
+    // 진행률 업데이트
+    $('#backgroundProgressBar').css('width', progress + '%');
+    $('#progressPercent').text(Math.round(progress) + '%');
+    $('#progressText').text(`진행 중... (${processed_books}/${total_books})`);
+    
+    // 통계 업데이트
+    $('#totalBooksCount').text(total_books);
+    $('#processedBooksCount').text(processed_books);
+    $('#successBooksCount').text(success_count);
+    $('#errorBooksCount').text(error_count);
+    
+    // 최근 로그 업데이트
+    if (recent_logs && recent_logs.length > 0) {
+        let logsHtml = '';
+        recent_logs.slice(0, 5).forEach(function(log) {
+            const icon = log.success ? '<i class="fas fa-check-circle text-success"></i>' : '<i class="fas fa-times-circle text-danger"></i>';
+            const time = new Date(log.created_at).toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+            
+            logsHtml += `
+                <div class="d-flex align-items-center mb-2">
+                    ${icon}
+                    <div class="ms-2 flex-grow-1">
+                        <div class="fw-bold text-truncate" style="max-width: 300px;">${log.book_title}</div>
+                        <small class="text-muted">${log.message} • ${time}</small>
+                    </div>
+                </div>
+            `;
+        });
+        $('#recentLogs').html(logsHtml);
+    }
+}
+
+// 완료 메시지 표시
+function showCompletionMessage(status) {
+    const { status: jobStatus, success_count, error_count, total_books } = status;
+    
+    $('#backgroundProgressBar').removeClass('progress-bar-animated');
+    
+    if (jobStatus === 'completed') {
+        $('#progressText').text('모든 작업이 완료되었습니다!');
+        $('#backgroundProgressBar').addClass('bg-success');
+        
+        const completionText = `총 ${total_books}권 중 ${success_count}권 성공, ${error_count}권 실패`;
+        $('#completionText').text(completionText);
+        $('#completionMessage').show();
+    } else if (jobStatus === 'failed') {
+        $('#progressText').text('작업 중 오류가 발생했습니다.');
+        $('#backgroundProgressBar').removeClass('bg-success').addClass('bg-danger');
+        
+        $('#completionText').text('시스템 오류로 인해 작업이 중단되었습니다.');
+        $('#completionMessage').removeClass('alert-success').addClass('alert-danger').show();
+    }
+    
+    // 닫기 버튼들 표시
+    $('#closeUpdateModal').show();
+    $('#closeButton').show();
+    $('#refreshButton').show();
+}
+
+// 진행률 모달 초기화
+function resetProgressModal() {
+    $('#backgroundProgressBar').css('width', '0%').addClass('progress-bar-animated bg-success').removeClass('bg-danger');
+    $('#progressPercent').text('0%');
+    $('#progressText').text('준비 중...');
+    
+    $('#totalBooksCount').text('0');
+    $('#processedBooksCount').text('0');
+    $('#successBooksCount').text('0');
+    $('#errorBooksCount').text('0');
+    
+    $('#recentLogs').html('<p class="text-muted text-center">작업이 시작되면 여기에 진행 상황이 표시됩니다.</p>');
+    $('#completionMessage').hide().removeClass('alert-danger').addClass('alert-success');
+    
+    $('#closeUpdateModal').hide();
+    $('#closeButton').hide();
+    $('#refreshButton').hide();
+    
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
+
+// 모달 닫기 시 정리
+$('#backgroundUpdateModal').on('hidden.bs.modal', function() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+    currentJobId = null;
+});
 
 // 사용하지 않음 (기존 전체 업데이트는 제거됨)
 </script>

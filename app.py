@@ -11,6 +11,9 @@ import os
 import csv
 import io
 from urllib.parse import quote
+import threading
+import uuid
+import time
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'
@@ -50,6 +53,36 @@ class BookTracker:
                 notes TEXT,
                 kyobo_link TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 백그라운드 업데이트 작업 큐 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS update_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                total_books INTEGER NOT NULL,
+                processed_books INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0,
+                error_count INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME NULL
+            )
+        ''')
+        
+        # 업데이트 로그 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS update_logs (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                book_id INTEGER NOT NULL,
+                book_title TEXT NOT NULL,
+                success BOOLEAN NOT NULL,
+                message TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES update_jobs (job_id),
+                FOREIGN KEY (book_id) REFERENCES books (id)
             )
         ''')
         
@@ -989,6 +1022,205 @@ class BookTracker:
                 titles.append(title)
         
         return titles
+    
+    # ============== 백그라운드 업데이트 작업 메서드들 ==============
+    
+    def create_update_job(self, total_books):
+        """새로운 업데이트 작업 생성"""
+        job_id = str(uuid.uuid4())
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO update_jobs (job_id, status, total_books)
+            VALUES (?, 'pending', ?)
+        ''', (job_id, total_books))
+        
+        conn.commit()
+        conn.close()
+        
+        return job_id
+    
+    def get_update_job_status(self, job_id):
+        """업데이트 작업 상태 조회"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT job_id, status, total_books, processed_books, 
+                   success_count, error_count, created_at, updated_at, completed_at
+            FROM update_jobs 
+            WHERE job_id = ?
+        ''', (job_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                'job_id': row[0],
+                'status': row[1],
+                'total_books': row[2],
+                'processed_books': row[3],
+                'success_count': row[4],
+                'error_count': row[5],
+                'created_at': row[6],
+                'updated_at': row[7],
+                'completed_at': row[8],
+                'progress': (row[3] / row[2] * 100) if row[2] > 0 else 0
+            }
+        return None
+    
+    def update_job_progress(self, job_id, processed_books, success_count, error_count, status='processing'):
+        """작업 진행 상황 업데이트"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE update_jobs 
+            SET processed_books = ?, success_count = ?, error_count = ?, 
+                status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = ?
+        ''', (processed_books, success_count, error_count, status, job_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def complete_update_job(self, job_id, final_status='completed'):
+        """작업 완료 처리"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE update_jobs 
+            SET status = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = ?
+        ''', (final_status, job_id))
+        
+        conn.commit()
+        conn.close()
+    
+    def log_update_result(self, job_id, book_id, book_title, success, message=""):
+        """개별 책 업데이트 결과 로그"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO update_logs (job_id, book_id, book_title, success, message)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (job_id, book_id, book_title, success, message))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_update_logs(self, job_id, limit=10):
+        """업데이트 로그 조회 (최근 N개)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT book_id, book_title, success, message, created_at
+            FROM update_logs 
+            WHERE job_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (job_id, limit))
+        
+        logs = []
+        for row in cursor.fetchall():
+            logs.append({
+                'book_id': row[0],
+                'book_title': row[1],
+                'success': bool(row[2]),
+                'message': row[3],
+                'created_at': row[4]
+            })
+        
+        conn.close()
+        return logs
+    
+    def background_update_books(self, job_id):
+        """백그라운드에서 Unknown 책들 업데이트"""
+        try:
+            print(f"백그라운드 업데이트 작업 시작: {job_id}")
+            
+            # Unknown 상태인 책들 조회
+            all_books = self.get_all_books()
+            unknown_books = [book for book in all_books if book['authors'] == 'Unknown']
+            
+            if not unknown_books:
+                self.complete_update_job(job_id, 'completed')
+                print(f"업데이트할 책이 없음: {job_id}")
+                return
+            
+            success_count = 0
+            error_count = 0
+            
+            for i, book in enumerate(unknown_books):
+                try:
+                    print(f"[{i+1}/{len(unknown_books)}] 처리 중: {book['title'][:40]}...")
+                    
+                    # 책 정보 검색
+                    books_info = self.search_book_info(book['title'])
+                    
+                    if books_info and len(books_info) > 0:
+                        book_info = books_info[0]
+                        update_success = self.update_book_details(book['id'], book_info)
+                        
+                        if update_success:
+                            success_count += 1
+                            self.log_update_result(job_id, book['id'], book['title'], True, 
+                                                 f"성공: {book_info.get('authors', 'N/A')}")
+                            print(f"  ✓ 성공: {book_info.get('authors', 'N/A')}")
+                        else:
+                            error_count += 1
+                            self.log_update_result(job_id, book['id'], book['title'], False, "DB 업데이트 실패")
+                            print(f"  ✗ DB 업데이트 실패")
+                    else:
+                        error_count += 1
+                        self.log_update_result(job_id, book['id'], book['title'], False, "검색 결과 없음")
+                        print(f"  ✗ 검색 결과 없음")
+                        
+                except Exception as e:
+                    error_count += 1
+                    error_msg = str(e)[:100]
+                    self.log_update_result(job_id, book['id'], book['title'], False, f"오류: {error_msg}")
+                    print(f"  ✗ 오류: {error_msg}")
+                
+                # 진행 상황 업데이트
+                processed = i + 1
+                self.update_job_progress(job_id, processed, success_count, error_count, 'processing')
+                
+                # API 부하 방지
+                time.sleep(0.2)
+            
+            # 작업 완료
+            self.complete_update_job(job_id, 'completed')
+            print(f"백그라운드 업데이트 완료: {job_id} - 성공 {success_count}, 실패 {error_count}")
+            
+        except Exception as e:
+            print(f"백그라운드 업데이트 오류: {job_id} - {str(e)}")
+            self.complete_update_job(job_id, 'failed')
+    
+    def start_background_update(self):
+        """백그라운드 업데이트 작업 시작"""
+        # Unknown 책 개수 확인
+        all_books = self.get_all_books()
+        unknown_books = [book for book in all_books if book['authors'] == 'Unknown']
+        
+        if not unknown_books:
+            return None, "업데이트할 책이 없습니다"
+        
+        # 작업 생성
+        job_id = self.create_update_job(len(unknown_books))
+        
+        # 백그라운드 스레드로 실행
+        thread = threading.Thread(target=self.background_update_books, args=(job_id,))
+        thread.daemon = True  # 메인 프로세스 종료 시 함께 종료
+        thread.start()
+        
+        return job_id, f"{len(unknown_books)}권의 업데이트 작업이 시작되었습니다"
 
 # BookTracker 인스턴스 생성
 book_tracker = BookTracker()
@@ -1527,6 +1759,77 @@ def bulk_update_details():
         return jsonify({
             'success': False,
             'error': f'시스템 오류 발생: {error_msg}'
+        }), 500
+
+# ============== 백그라운드 업데이트 API 엔드포인트들 ==============
+
+@app.route('/start_background_update', methods=['POST'])
+def start_background_update():
+    """백그라운드 업데이트 작업 시작"""
+    try:
+        job_id, message = book_tracker.start_background_update()
+        
+        if job_id:
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'message': message
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': message
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'백그라운드 업데이트 시작 실패: {str(e)}'
+        }), 500
+
+@app.route('/update_status/<job_id>', methods=['GET'])
+def get_update_status(job_id):
+    """업데이트 작업 상태 조회"""
+    try:
+        job_status = book_tracker.get_update_job_status(job_id)
+        
+        if job_status:
+            # 최근 로그도 함께 반환
+            recent_logs = book_tracker.get_update_logs(job_id, limit=5)
+            job_status['recent_logs'] = recent_logs
+            
+            return jsonify({
+                'success': True,
+                'status': job_status
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '작업을 찾을 수 없습니다'
+            }), 404
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'상태 조회 실패: {str(e)}'
+        }), 500
+
+@app.route('/update_logs/<job_id>', methods=['GET'])
+def get_update_logs_api(job_id):
+    """업데이트 로그 조회"""
+    try:
+        limit = request.args.get('limit', 20, type=int)
+        logs = book_tracker.get_update_logs(job_id, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'logs': logs
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'로그 조회 실패: {str(e)}'
         }), 500
 
 if __name__ == '__main__':
