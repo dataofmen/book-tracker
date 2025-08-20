@@ -10,7 +10,7 @@
         {% set unknown_books = books | selectattr('authors', 'equalto', 'Unknown') | list %}
         {% if unknown_books|length > 0 %}
         <button class="btn btn-warning me-2" onclick="smartUpdateDetails()">
-            <i class="fas fa-sync"></i> 10권씩 업데이트 ({{ unknown_books|length }}권 남음)
+            <i class="fas fa-sync"></i> 5권씩 업데이트 ({{ unknown_books|length }}권 남음)
         </button>
         {% endif %}
         <a href="{{ url_for('index') }}" class="btn btn-success">
@@ -530,7 +530,7 @@ function updateBookDetails(bookId, bookTitle) {
 
 // 10권씩 업데이트
 function smartUpdateDetails() {
-    if (!confirm('Unknown 상태인 책 10권의 상세정보를 업데이트하시겠습니까?')) {
+    if (!confirm('Unknown 상태인 책 5권의 상세정보를 업데이트하시겠습니까?')) {
         return;
     }
     
@@ -543,7 +543,7 @@ function smartUpdateDetails() {
         url: '/smart_update_details',
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({ count: 10 }),
+        data: JSON.stringify({ count: 5 }),
         success: function(response) {
             if (response.success) {
                 const results = response.results;

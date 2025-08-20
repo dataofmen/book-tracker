@@ -1301,7 +1301,7 @@ def smart_update_details():
     """스마트 업데이트: 사용자 지정 개수만큼 처리"""
     try:
         data = request.get_json() or {}
-        update_count = data.get('count', 10)  # 기본 10권
+        update_count = data.get('count', 5)  # 기본 5권으로 축소 (Railway 30초 제한 고려)
         
         # Unknown 상태인 책들만 필터링
         all_books = book_tracker.get_all_books()
@@ -1327,7 +1327,17 @@ def smart_update_details():
         
         print(f"스마트 업데이트: {len(books_to_update)}권 처리 시작")
         
+        # Railway 타임아웃 방지를 위한 시간 추적
+        import time
+        start_time = time.time()
+        max_execution_time = 25  # 25초 제한 (Railway 30초 제한 고려)
+        
         for i, book in enumerate(books_to_update):
+            # 시간 체크 - 너무 오래 걸리면 중단
+            if time.time() - start_time > max_execution_time:
+                print(f"시간 초과로 인한 조기 종료: {i}권 처리 완료")
+                results['remaining'] = len(unknown_books) - i
+                break
             try:
                 print(f"[{i+1}/{len(books_to_update)}] 업데이트: {book['title'][:40]}...")
                 
@@ -1365,9 +1375,9 @@ def smart_update_details():
                 })
                 print(f"  ✗ 오류: {str(e)}")
             
-            # API 부하 방지
+            # API 부하 방지 - Railway 타임아웃 고려하여 대기시간 축소
             import time
-            time.sleep(0.2)
+            time.sleep(0.1)
         
         success_count = len(results['success'])
         error_count = len(results['errors'])
