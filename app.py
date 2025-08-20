@@ -25,8 +25,8 @@ app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 app.config['MAX_CONTENT_PATH'] = 5 * 1024 * 1024
 
 # 네이버 API 설정 (환경변수 또는 직접 설정)
-NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')  # 네이버 개발자센터에서 발급
-NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')  # 네이버 개발자센터에서 발급
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', 'IvsMX1RyTuWZiGR6Reot')  # 네이버 개발자센터에서 발급
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '4CqizzHQ2J')  # 네이버 개발자센터에서 발급
 
 class BookTracker:
     def __init__(self, db_path='books.db'):
