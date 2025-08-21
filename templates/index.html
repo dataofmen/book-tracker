@@ -171,14 +171,35 @@
 <script>
 let selectedBook = null;
 
-$('#searchForm').on('submit', function(e) {
-    e.preventDefault();
-    searchBooks();
+// 모바일 및 데스크톱 호환성을 위한 이벤트 처리
+$(document).ready(function() {
+    // 검색 폼 이벤트 처리 (모바일 호환)
+    $('#searchForm').on('submit', function(e) {
+        e.preventDefault();
+        searchBooks();
+    });
+    
+    // 검색 버튼 클릭 이벤트 (터치 호환)
+    $('#searchForm button[type="submit"]').on('click touchend', function(e) {
+        e.preventDefault();
+        searchBooks();
+    });
+    
+    // 엔터키 처리 (모바일 키보드 호환)
+    $('#bookQuery').on('keypress', function(e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            searchBooks();
+        }
+    });
 });
 
 function searchBooks() {
     const query = $('#bookQuery').val().trim();
-    if (!query) return;
+    if (!query) {
+        alert('검색어를 입력해주세요.');
+        return;
+    }
 
     $('#loadingSpinner').removeClass('d-none');
     $('#searchResults').addClass('d-none');
@@ -245,7 +266,7 @@ function displaySearchResults(books) {
                             </div>
                         </div>
                         <div class="col-2 d-flex align-items-center">
-                            <button class="btn btn-primary btn-sm w-100" onclick="selectBook(${index})">
+                            <button class="btn btn-primary btn-sm w-100 select-book-btn" data-index="${index}" type="button">
                                 <i class="fas fa-plus"></i> 선택
                             </button>
                         </div>
@@ -258,6 +279,13 @@ function displaySearchResults(books) {
     
     $('#searchResults').removeClass('d-none');
     window.searchedBooks = books;
+    
+    // 동적으로 생성된 버튼에 이벤트 핸들러 추가 (모바일 호환)
+    $('.select-book-btn').off('click touchend').on('click touchend', function(e) {
+        e.preventDefault();
+        const index = parseInt($(this).data('index'));
+        selectBook(index);
+    });
 }
 
 function selectBook(index) {
@@ -285,11 +313,16 @@ function selectBook(index) {
     $('#addBookModal').modal('show');
 }
 
-$('#confirmAddBook').on('click', function() {
+// 책 추가 확인 버튼 이벤트 (모바일 호환)
+$('#confirmAddBook').off('click touchend').on('click touchend', function(e) {
+    e.preventDefault();
     if (!selectedBook) return;
     
     const price = $('#bookPrice').val();
     const notes = $('#bookNotes').val();
+    
+    // 중복 추가 방지를 위한 버튼 비활성화
+    $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> 추가 중...');
     
     $.ajax({
         url: '/add_book',
@@ -301,15 +334,20 @@ $('#confirmAddBook').on('click', function() {
             notes: notes
         }),
         success: function(response) {
+            $('#confirmAddBook').prop('disabled', false).html('<i class="fas fa-plus"></i> 책 추가');
+            
             if (response.success) {
                 $('#addBookModal').modal('hide');
                 alert('책이 성공적으로 추가되었습니다!');
                 location.reload();
+            } else if (response.is_duplicate) {
+                alert('이미 등록된 책입니다: ' + (response.duplicate_title || selectedBook.title));
             } else {
                 alert(response.error || '책 추가 중 오류가 발생했습니다.');
             }
         },
         error: function() {
+            $('#confirmAddBook').prop('disabled', false).html('<i class="fas fa-plus"></i> 책 추가');
             alert('책 추가 중 오류가 발생했습니다. 다시 시도해주세요.');
         }
     });

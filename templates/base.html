@@ -28,6 +28,48 @@
         .book-card:hover {
             transform: translateY(-2px);
         }
+        
+        /* 모바일 호환성 개선 */
+        @media (max-width: 768px) {
+            .btn {
+                min-height: 44px; /* 터치 타겟 최소 크기 */
+                font-size: 16px; /* iOS 확대 방지 */
+            }
+            
+            .form-control {
+                min-height: 44px;
+                font-size: 16px; /* iOS 확대 방지 */
+            }
+            
+            .input-group .btn {
+                border-radius: 0 0.375rem 0.375rem 0 !important;
+            }
+            
+            .card-body {
+                padding: 1rem 0.75rem;
+            }
+            
+            .modal-dialog {
+                margin: 0.5rem;
+            }
+            
+            .select-book-btn {
+                min-height: 40px;
+                touch-action: manipulation; /* 더블탭 확대 방지 */
+            }
+        }
+        
+        /* 터치 디바이스용 버튼 개선 */
+        .btn {
+            touch-action: manipulation;
+            user-select: none;
+        }
+        
+        /* 로딩 시 버튼 스타일 */
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
