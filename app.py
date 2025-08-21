@@ -712,66 +712,90 @@ class BookTracker:
     
     def check_duplicate(self, title, isbn=None):
         """중복 도서 검사 - 강화된 중복 검사"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # 1. ISBN이 있으면 ISBN 우선 검사
-        if isbn and isbn.strip():
-            clean_isbn = isbn.strip().replace('-', '').replace(' ', '')
-            if clean_isbn:
-                cursor.execute('SELECT title FROM books WHERE isbn = ? AND isbn != ""', (isbn,))
-                result = cursor.fetchone()
-                if result:
-                    conn.close()
-                    print(f"ISBN 중복 발견: {isbn} -> {result[0]}")
-                    return True
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 1. ISBN이 있으면 ISBN 우선 검사
+            if isbn and isbn.strip():
+                try:
+                    clean_isbn = isbn.strip().replace('-', '').replace(' ', '')
+                    if clean_isbn:
+                        cursor.execute('SELECT title FROM books WHERE isbn = ? AND isbn != ""', (isbn,))
+                        result = cursor.fetchone()
+                        if result:
+                            conn.close()
+                            print(f"ISBN 중복 발견: {isbn} -> {result[0]}")
+                            return True
+                        
+                        # ISBN 정규화해서도 체크
+                        cursor.execute('SELECT isbn, title FROM books WHERE isbn != ""')
+                        existing_isbns = cursor.fetchall()
+                        for existing_isbn, existing_title in existing_isbns:
+                            clean_existing = existing_isbn.strip().replace('-', '').replace(' ', '')
+                            if clean_isbn == clean_existing:
+                                conn.close()
+                                print(f"정규화된 ISBN 중복 발견: {clean_isbn} -> {existing_title}")
+                                return True
+                except Exception as isbn_error:
+                    print(f"ISBN 중복 검사 오류: {str(isbn_error)}")
+                    # ISBN 검사 실패해도 제목 검사 계속
+            
+            # 2. 제목으로 중복 검사 (더 강화된 방식)
+            try:
+                cursor.execute('SELECT title FROM books')
+                existing_titles = [row[0] for row in cursor.fetchall()]
                 
-                # ISBN 정규화해서도 체크
-                cursor.execute('SELECT isbn, title FROM books WHERE isbn != ""')
-                existing_isbns = cursor.fetchall()
-                for existing_isbn, existing_title in existing_isbns:
-                    clean_existing = existing_isbn.strip().replace('-', '').replace(' ', '')
-                    if clean_isbn == clean_existing:
-                        conn.close()
-                        print(f"정규화된 ISBN 중복 발견: {clean_isbn} -> {existing_title}")
-                        return True
-        
-        # 2. 제목으로 중복 검사 (더 강화된 방식)
-        cursor.execute('SELECT title FROM books')
-        existing_titles = [row[0] for row in cursor.fetchall()]
-        
-        conn.close()
-        
-        # 더 엄격한 정규화
-        clean_title = self._normalize_title_for_duplicate_check(title)
-        
-        for existing in existing_titles:
-            clean_existing = self._normalize_title_for_duplicate_check(existing)
-            if clean_title == clean_existing:
-                print(f"제목 중복 발견: '{title}' -> '{existing}'")
-                return True
-        
-        return False
+                # 더 엄격한 정규화
+                clean_title = self._normalize_title_for_duplicate_check(title)
+                
+                for existing in existing_titles:
+                    try:
+                        clean_existing = self._normalize_title_for_duplicate_check(existing)
+                        if clean_title and clean_existing and clean_title == clean_existing:
+                            conn.close()
+                            print(f"제목 중복 발견: '{title}' -> '{existing}'")
+                            return True
+                    except Exception as title_norm_error:
+                        print(f"제목 정규화 오류: {str(title_norm_error)}")
+                        continue
+                        
+            except Exception as title_error:
+                print(f"제목 중복 검사 오류: {str(title_error)}")
+                
+            conn.close()
+            return False
+            
+        except Exception as e:
+            print(f"중복 검사 전체 오류: {str(e)}")
+            # 오류 발생 시 안전하게 중복 아님으로 처리
+            return False
     
     def _normalize_title_for_duplicate_check(self, title):
-        """중복 검사용 제목 정규화"""
-        import re
-        if not title:
-            return ""
-        
-        # 기본 정규화
-        normalized = title.strip().lower()
-        
-        # 공백문자 정규화 (일반 공백, 전각 공백, 탭 등)
-        normalized = re.sub(r'\s+', '', normalized)
-        
-        # 특수문자 제거 (괄호, 하이픈, 콜론 등)
-        normalized = re.sub(r'[^\w가-힣]', '', normalized)
-        
-        # 연속된 문자 정리
-        normalized = re.sub(r'(.)\1{2,}', r'\1', normalized)
-        
-        return normalized
+        """중복 검사용 제목 정규화 - 안전한 버전"""
+        try:
+            import re
+            if not title or not isinstance(title, str):
+                return ""
+            
+            # 기본 정규화
+            normalized = title.strip().lower()
+            
+            # 공백문자 정규화 (일반 공백, 전각 공백, 탭 등)
+            normalized = re.sub(r'\s+', '', normalized)
+            
+            # 특수문자 제거 (괄호, 하이픈, 콜론 등)
+            normalized = re.sub(r'[^\w가-힣]', '', normalized)
+            
+            # 연속된 문자 정리
+            normalized = re.sub(r'(.)\1{2,}', r'\1', normalized)
+            
+            return normalized
+            
+        except Exception as e:
+            print(f"제목 정규화 오류: {title} -> {str(e)}")
+            # 정규화 실패 시 기본 처리
+            return title.strip().lower() if title else ""
     
     def bulk_add_books(self, book_titles, progress_callback=None):
         """대량 책 추가 - 강화된 오류 처리"""
@@ -1346,16 +1370,23 @@ def add_book():
                 'error': '책 제목이 필요합니다.'
             }), 400
         
-        # 중복 검사 수행
-        is_duplicate = book_tracker.check_duplicate(title, isbn)
-        
-        if is_duplicate:
-            return jsonify({
-                'success': False,
-                'is_duplicate': True,
-                'duplicate_title': title,
-                'error': f'이미 등록된 책입니다: {title}'
-            }), 409  # Conflict status code
+        # 중복 검사 수행 (예외 처리 포함)
+        try:
+            is_duplicate = book_tracker.check_duplicate(title, isbn)
+            
+            if is_duplicate:
+                print(f"중복 도서 감지: {title} (ISBN: {isbn})")
+                return jsonify({
+                    'success': False,
+                    'is_duplicate': True,
+                    'duplicate_title': title,
+                    'error': f'이미 등록된 책입니다: {title}'
+                }), 409  # Conflict status code
+                
+        except Exception as dup_error:
+            print(f"중복 검사 중 오류: {str(dup_error)}")
+            # 중복 검사 실패 시에도 계속 진행 (안전 모드)
+            pass
         
         # 중복이 아니면 책 추가
         book_id = book_tracker.add_book(book_info, price, notes)

@@ -346,9 +346,39 @@ $('#confirmAddBook').off('click touchend').on('click touchend', function(e) {
                 alert(response.error || '책 추가 중 오류가 발생했습니다.');
             }
         },
-        error: function() {
+        error: function(xhr, status, error) {
             $('#confirmAddBook').prop('disabled', false).html('<i class="fas fa-plus"></i> 책 추가');
-            alert('책 추가 중 오류가 발생했습니다. 다시 시도해주세요.');
+            
+            // HTTP 409 (Conflict) 상태 코드 처리 - 중복 도서
+            if (xhr.status === 409) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.is_duplicate) {
+                        alert('⚠️ 이미 등록된 책입니다!\n\n제목: ' + (response.duplicate_title || selectedBook.title));
+                        return;
+                    }
+                } catch (e) {
+                    // JSON 파싱 실패 시 기본 중복 메시지
+                    alert('⚠️ 이미 등록된 책입니다: ' + selectedBook.title);
+                    return;
+                }
+            }
+            
+            // HTTP 400 (Bad Request) 상태 코드 처리
+            if (xhr.status === 400) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    alert('❌ ' + (response.error || '잘못된 요청입니다.'));
+                    return;
+                } catch (e) {
+                    alert('❌ 잘못된 요청입니다.');
+                    return;
+                }
+            }
+            
+            // 기타 오류
+            console.error('책 추가 오류:', xhr.status, error);
+            alert('❌ 책 추가 중 오류가 발생했습니다.\n\n상태: ' + xhr.status + '\n다시 시도해주세요.');
         }
     });
 });
